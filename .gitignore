@@ -1,0 +1,49 @@
+# --- Reference papers / documents ---
+*.pdf
+
+# --- Large image datasets & raw NFT assets ---
+data/
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tiff
+*.webp
+*.gif
+*.npy
+*.npz
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# --- Bare-metal build artifacts ---
+build/
+bin/
+out/
+*.o
+*.obj
+*.out
+*.a
+*.so
+*.dll
+*.exe
+*.elf
+*.map
+*.d
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Editor / OS cruft ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# --- Python (offline training scripts, if any) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
