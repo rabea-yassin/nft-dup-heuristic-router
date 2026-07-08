@@ -36,6 +36,12 @@ out/
 logs/
 *.log
 
+# --- Deploy key (repo-scoped SSH auth, never commit) ---
+.deploy_key/
+
+# --- Personal working notes, local-only ---
+NEXT_STEPS.md
+
 # --- Editor / OS cruft ---
 .vscode/
 .idea/
