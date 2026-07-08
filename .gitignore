@@ -2,7 +2,11 @@
 *.pdf
 
 # --- Large image datasets & raw NFT assets ---
-data/
+# Everything under data/ is ignored except data/example/, a small,
+# git-tracked subset (public Kaggle-sourced images only) that shows the
+# data layout without shipping the full corpus.
+data/*
+!data/example/
 *.png
 *.jpg
 *.jpeg
@@ -16,6 +20,7 @@ data/
 *.tar
 *.tar.gz
 *.7z
+!data/example/**/*.png
 
 # --- Bare-metal build artifacts ---
 build/
@@ -41,6 +46,7 @@ logs/
 
 # --- Personal working notes, local-only ---
 NEXT_STEPS.md
+NOTES_TO_SELF.md
 
 # --- Editor / OS cruft ---
 .vscode/
