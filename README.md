@@ -88,8 +88,17 @@ reinvent the wheel, matters enough to spell out:
 
 - **Why not just use Johannes Buchner's [`imagehash`](https://github.com/JohannesBuchner/imagehash)
   directly?** It already implements `average_hash`/`phash`/`colorhash`/`crop_resistant_hash`
-  — the exact aHash/pHash/hsvHash/sHash the paper uses — and is well-tested. But it's pure
-  PIL/numpy/scipy, and embedding a Python interpreter (or shelling out per image) into a
+  — what the paper's aHash/pHash/hsvHash/sHash experiments actually ran on (paper: "these
+  hash algorithms have an available Python implementation by Buchner") — and is well-tested.
+  One correction worth flagging: the paper's Section II-C(v) *describes* hsvHash as a
+  block/region-based statistical hash (citing Tang et al. 2013), but `colorhash()` is
+  actually a **global** histogram (fractions of black/gray/hue-binned-saturated pixels
+  across the whole image) — a different algorithm than the cited paper's, not just a
+  looser implementation of it. Since the paper doesn't reproduce Tang et al.'s algorithm in
+  enough detail to reimplement from scratch, and its published numbers were produced by
+  whatever Buchner's library actually does, we port `colorhash()`'s real algorithm, not the
+  block/region description. It's pure PIL/numpy/scipy, and embedding a Python interpreter
+  (or shelling out per image) into a
   validator's hot path reintroduces interpreter startup cost, GIL contention, and
   unpredictable allocation — precisely what a zero-allocation, sub-millisecond router is
   trying to eliminate. It's also not an optimized C core under the hood we could just bind
@@ -105,14 +114,17 @@ reinvent the wheel, matters enough to spell out:
      environment; `training/` calls `imagehash` directly to produce labeled hash/feature
      data rather than maintaining a second, redundant Python reimplementation.
   3. **Never in the runtime binary.** No Python dependency at all in the shipped router.
-- **Parity target is per-hash, and it's statistical, not literal, for the harder ones:**
+- **Parity target is per-hash, and it's statistical, not literal, only where the reference
+  algorithm itself isn't fully known:**
   - `aHash`/`pHash`: simple, fully-specified pixel operations — bit-exact parity is a
     realistic goal if we match PIL's exact resize filter and luma coefficients, with a
     small Hamming-distance tolerance accepted as passing.
-  - `hsvHash`: HSV conversion + block statistics make bit-exact parity impractical to
-    chase. The real acceptance criterion is reproducing the paper's Table II/III mean
-    Hamming distances and separation thresholds per manipulation category — the thing our
-    accuracy claims actually depend on.
+  - `hsvHash`: once the ambiguity above is resolved (porting `colorhash()`'s actual
+    algorithm), bit-exact parity is realistic here too — it's a fully deterministic global
+    histogram over quantized HSV fractions, no different in principle from aHash/pHash.
+    The one genuine imprecision-tolerant step is our own RGB->HSV conversion needing to
+    match PIL's specific 0-255-scaled H/S/V convention (not the more common 0-360 degree
+    convention for hue) — get that right and the rest is exact arithmetic.
   - `sHash`: if our segmentation approach differs from `crop_resistant_hash`'s internals
     (see below), comparing against the Python fixture stops being meaningful for this hash.
     Ground truth shifts to the paper's own published numbers directly.
@@ -144,7 +156,14 @@ reinvent the wheel, matters enough to spell out:
 ├── src/
 │   ├── features/     # 16-byte feature vector extraction (aspect ratio, Laplacian
 │   │                 # variance, histogram-shift bucket, center of mass)
-│   ├── hashes/       # aHash / pHash / hsvHash / sHash implementations (C11)
+│   ├── hashes/       # One directory per hash (C11), each with its own README:
+│   │   ├── common/   #   shared: box-filter downsample (aHash/pHash) + bit-exact
+│   │   │             #   Pillow op ports (dHash/sHash) — see common/README.md
+│   │   ├── ahash/    #   average hash (64-bit)
+│   │   ├── phash/    #   perceptual/DCT hash (64-bit)
+│   │   ├── hsvhash/  #   global HSV color histogram (42-bit, bit-exact colorhash)
+│   │   ├── dhash/    #   difference hash (64-bit); sHash's per-segment hash_func
+│   │   └── shash/    #   segmentation hash (list of dHashes, crop-resistant)
 │   ├── bktree/       # Generic BK-tree over fixed-width hashes + Hamming distance
 │   │                 # (instantiated once per hash type), plus the O(1) exact-match
 │   │                 # table used when a query's threshold is 0
