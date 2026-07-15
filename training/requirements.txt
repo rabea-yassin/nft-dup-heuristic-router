@@ -1,2 +1,17 @@
+# Pinned to the exact versions every parity/validation claim in this repo was
+# produced with. A default-filter or rounding change in any of these silently
+# shifts what "matching the paper" means, so treat a bump as a re-validation
+# rather than a routine upgrade.
 Pillow==10.4.0
-numpy==1.26.4
+numpy==2.5.1
+
+# Differential-test oracle and training-data generator. Never in the detector's
+# own path -- imagehash IS the Python reference our C11 hashes were validated
+# bit-exact against (600 images, 1802 reference-CSV pairs).
+ImageHash==4.3.2
+scipy==1.18.0
+
+# ORB keypoints + RANSAC homography for the geometric signal that replaces
+# sHash. The headless build is deliberate: the pipeline is offline and never
+# opens a window, so the GUI dependencies are dead weight.
+opencv-python-headless==5.0.0.93

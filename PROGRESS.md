@@ -166,29 +166,95 @@ the real architectural cost of closing the geometric blind spot.
 
 ---
 
-## 4. Notes on the geometric (ORB) work
+## 4. The geometric (ORB) baseline, and why its numbers were retired
 
-An initial ORB pipeline (ORB → LSH voting → RANSAC geometric verification, plus a "mirror hack"
-since ORB is rotation-invariant but *not* mirror-invariant) reported F1 73.6% / accuracy 60.7%.
+Ahmad's ORB pipeline (ORB → LSH voting → RANSAC geometric verification, plus a "mirror hack"
+since ORB is rotation-invariant but *not* mirror-invariant) reported **F1 73.6%, precision 82.7%,
+recall 66.3%, accuracy 60.7%**. Before building on it we tried to verify it, and the numbers
+turned out to measure something other than what they appear to.
 
-**Those numbers are retired, for two structural reasons rather than model quality:**
+### The gallery was missing an entire collection — and *why* is the real finding
 
-1. **The negatives were unwinnable.** Every `non_duplicate` row's `copy_image` is an *original*
-   image, and the gallery being queried contained that same original. Querying an image against a
-   gallery that contains it yields a perfect self-match → flagged duplicate → but labelled
-   `is_copy=0` → **guaranteed false positive**. The root cause is a schema misreading: **`is_copy`
-   labels a *pair*, not an image.** The dataset is pairwise (matching the paper's methodology),
-   but the pipeline was retrieval-shaped and reused pairwise labels as per-image labels.
-2. **ORB was asked to do a job it can't.** The vote threshold was detuned 15 → 1 to chase
-   pixelated and colour-swapped images — manipulations ORB fundamentally cannot detect (pixelation
-   destroys keypoints; colour-swap is invisible in grayscale). Tuning optimised a single global F1
-   across a dataset dominated by non-geometric categories, forcing a bad compromise.
+The gallery index (`build/image_map.pkl`) indexes **2,000 of the 3,000** originals in `data/raw/`:
+1,000 azuki + 1,000 bayc. **All 1,000 CryptoPunk (`cp_`) originals are absent.**
 
-**Lesson, and the design principle going forward:** ORB must be a **geometric specialist**
-supplementing the other hashes, not an all-manipulations detector. The other signals already
-cover pixelation/colour/text; ORB owns crop/rotate/scale/reposition. Evaluation is therefore
-**pairwise** (comparable to the hashes and to the paper), and thresholds are tuned on the
-**geometric subset only**, with per-category metrics reported rather than one global F1.
+The cause is not a stale file — rebuilding the index changes nothing. **ORB physically cannot
+describe a CryptoPunk.** Punks are natively **24×24 px**, and `generate_dataset.py`'s downscale
+only ever *shrinks* (`if max(w, h) <= max_dim: return`), so they stay 24×24 while azuki/bayc land
+at 256×256. ORB's default `patchSize` and `edgeThreshold` are both **31 px — larger than the
+entire image** — so `detectAndCompute` returns **zero descriptors for 100% of punks** (measured:
+150/150). The indexer then silently drops them:
+
+```python
+_, descriptors = orb.detectAndCompute(img, None)
+if descriptors is not None:      # <- every punk fails this test, silently
+    image_filenames[img_id] = os.path.basename(filepath)
+```
+
+So an entire collection vanished from the gallery without a single warning. Once gone, the
+missing collection predetermines the verdict for *every* row:
+
+| Row | What happens | Result |
+|-----|--------------|--------|
+| positive, copy of a **CryptoPunk** | original not indexed → nothing to match | forced **FN** |
+| positive, copy of an **azuki/bayc** | original indexed → ORB finds it | **TP** |
+| negative, an unrelated **azuki/bayc** | that exact image *is* in the gallery → finds itself | forced **FP** |
+| negative, an unrelated **CryptoPunk** | not indexed, and pixel-art punks resemble nothing in the gallery | **TN** by luck |
+
+The verdict is decided by **which collection an image belongs to**, not by whether it is a duplicate.
+
+### The proof: the confusion matrix reproduces from set membership alone
+
+`python/geometric/verify_baseline.py` predicts the published confusion matrix using nothing but
+"is this filename in the gallery?" — pure set arithmetic, **no OpenCV, no image decoding**:
+
+| cell | reported | predicted from membership |
+|------|---------:|--------------------------:|
+| TP | 30,210 | **30,210** |
+| FN | 15,390 | **15,390** |
+| FP | 6,306 | **6,306** |
+| TN | 3,294 | **3,294** |
+
+Four of four exact; precision/recall/accuracy match to two decimals. A second tell corroborates
+it: the threshold grid search is **flat** (F1 73.58 → 73.58 → 73.58 → 73.57 → 73.52 across every
+combination). Thresholds should dominate such a system. They are **inert**, because the ORB score
+was never deciding anything.
+
+### What this actually tells us — the good news
+
+- The reported figures say **nothing** about ORB's quality; they are an artifact of a stale index.
+- But **ORB caught 100% of the positives it could possibly catch** — every findable duplicate,
+  zero misses among them. That is real evidence the pipeline *works*; it was simply never given a
+  fair test.
+- Note this is **not** overfitting, and not a consequence of which dataset was trained on: only two
+  hyperparameters were tuned, and they were inert anyway. It is a data-preparation bug.
+
+### Three design lessons carried forward
+
+1. **ORB imposes a minimum resolution on the corpus — the hashes do not.** This is a genuine
+   architectural cost of adopting a feature-matching signal, and it is easy to miss because it
+   fails *silently*. aHash/pHash/hsvHash resize internally to 8×8/32×32 and work at any input
+   size; ORB needs real spatial extent (31 px patch) and simply returns nothing below it. The fix
+   is a normalisation step: scale every image to a common working edge (256 px) before ORB, using
+   **NEAREST** when magnifying — pixel art's hard edges *are* the corners ORB keys on, and
+   interpolating them away measurably costs keypoints (NEAREST 225 kp vs LANCZOS 186; as-is 0).
+   With normalisation, punk exact-copies score 137–235 inliers instead of 0.
+   *Caveat to carry:* upscaling cannot create information. Punks remain the weakest case — their
+   geometric scores (crop ≈22–51, flip ≈9–66) overlap their non-duplicate scores (≈8–62), so ORB
+   is far less discriminative on 24×24 pixel art than on 256 px artwork. Worth reporting, and
+   notable because CryptoPunks is the very collection the paper used for its Table V evaluation.
+2. **Go pairwise.** Comparing `original_image` vs `copy_image` directly removes the gallery from
+   the accuracy path entirely — no gallery, no membership artifact, and this whole class of bug
+   becomes inexpressible. It also matches the dataset's own schema (**`is_copy` labels a *pair*,
+   not an image**), the paper's methodology, and how our four hashes are evaluated, so ORB becomes
+   directly comparable to them. The gallery/LSH survives only for the scalability discussion.
+3. **ORB must be a geometric specialist.** The vote threshold had been detuned 15 → 1 to chase
+   pixelated and colour-swapped images — manipulations ORB fundamentally cannot detect (measured:
+   pixelated punks score 0, pixelated azuki/bayc score 10–29, against non-duplicates at ~10) —
+   while a single global F1 was optimised across a dataset dominated by non-geometric categories.
+   The other signals already cover pixelation/colour/text; ORB owns crop/rotate/scale/reposition.
+   So thresholds are tuned on the **geometric subset only**, and metrics are reported **per
+   category**, never as one global F1.
 
 ---
 
