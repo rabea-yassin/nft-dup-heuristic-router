@@ -48,7 +48,17 @@ Scored on the geometric subset only (flip/rotate + crop/reposition, plus the
 non-duplicates ORB must reject), because that is the job ORB is kept for.
 
 Usage:
+    # full curve
     training/.venv/bin/python python/geometric/descriptor_budget.py --split test
+
+    # live demo: just the headline comparison, on a small fast sample
+    training/.venv/bin/python python/geometric/descriptor_budget.py --split test \
+        --budgets 500,128 --positives 300 --negatives 200
+
+`--budgets` makes the descriptor budget a runnable knob rather than a static
+table: it is how we show, at presentation time, that we know the on-chain
+storage cost exists, that we characterised it, and exactly what accuracy each
+budget buys. ΔF1 is measured against the largest budget in the run.
 """
 
 from __future__ import annotations
@@ -130,6 +140,12 @@ def main() -> None:
     parser.add_argument("--positives", type=int, default=1200)
     parser.add_argument("--negatives", type=int, default=800)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--budgets",
+        type=lambda s: sorted({int(x) for x in s.split(",")}, reverse=True),
+        default=list(BUDGETS),
+        help="comma-separated nfeatures values to run (default: the full curve)",
+    )
     args = parser.parse_args()
 
     split_dir = args.data_dir / args.split
@@ -150,7 +166,7 @@ def main() -> None:
 
     baseline_f1 = None
     rows = []
-    for budget in BUDGETS:
+    for budget in args.budgets:
         started = time.time()
         matcher = OrbMatcher(images_dir, orb_features=budget)
         scored = [(matcher.score(original, copy), is_copy)
@@ -172,12 +188,18 @@ def main() -> None:
               f"{t:>8}{precision:>7.1%}{recall:>7.1%}{f1:>7.1%}{delta:>+6.1f}"
               f"   ({time.time()-started:.0f}s)", flush=True)
 
-    out = split_dir / "descriptor_budget.csv"
-    with open(out, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"\n-> {out}")
+    # Only the full canonical curve owns descriptor_budget.csv; a partial
+    # --budgets run (e.g. a live demo) must not overwrite the numbers the report
+    # cites.
+    if args.budgets == list(BUDGETS):
+        out = split_dir / "descriptor_budget.csv"
+        with open(out, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"\n-> {out}")
+    else:
+        print("\n(partial --budgets run: canonical descriptor_budget.csv left untouched)")
 
 
 if __name__ == "__main__":
