@@ -258,7 +258,154 @@ was never deciding anything.
 
 ---
 
-## 5. Known validity caveat
+## 5. The swap, measured: ORB beats sHash on sHash's own job
+
+Section 4 retired the *old* baseline. This section is the new, honest measurement
+that justifies replacing sHash with ORB — done **pairwise** (no gallery, per
+lesson 2 above) on the manipulations sHash exists for: `flip_rotate_mirror` and
+`resize_crop_reposition`, plus the `non_duplicate` negatives the signal must
+reject. Test split: 3,600 geometric positives, 2,400 negatives.
+
+**The comparison is deliberately rigged against ORB.** ORB uses the threshold
+tuned on the *train* split (`t=16`), the honest protocol. sHash is given its
+*best-case* threshold, swept on the *test* set itself — an oracle advantage no
+real deployment gets. So sHash's numbers are an upper bound and ORB's are real.
+
+| signal | threshold | precision | recall | F1 |
+|---|---|---|---|---|
+| sHash (best-case, oracle) | dist ≤ 28 | 66.5% | 89.8% | 76.4% |
+| **ORB** (honest, train-tuned) | inliers > 16 | **91.2%** | **90.0%** | **90.6%** |
+
+**+14.2 F1 to ORB, with sHash holding the oracle advantage.**
+
+### The number that looks like a tie, and isn't
+
+sHash's 89.8% recall looks competitive, and its per-category detection is nearly
+identical to ORB's (flip 80.9% vs 81.7%; crop 98.7% vs 98.3%). Both are
+artifacts of the same thing: **sHash buys recall by flagging almost everything.**
+At dist ≤ 28 it flags **1,630 of 2,400 non-duplicates (68%)**. The decisive cut
+is to hold precision equal and compare recall:
+
+> At ORB's precision (91.2%), sHash reaches only **27.2% recall** vs ORB's
+> **90.0%** — a **3.3× gap**. sHash is dominated across its entire operating
+> curve; there is no threshold at which it is the better choice.
+
+**A sharper way to say it:** at this 60/40 base rate the trivial "flag
+everything" classifier scores **F1 75.0%**. sHash's oracle best is 76.4% — it
+beats a coin-that-always-says-yes by 1.4 points. It is a signal that barely
+functions on the job it was designed for, which is exactly why its precision
+(66.5%) sits so near the 60% base rate. This is the evidence for the swap.
+
+### Refinement of §4 lesson 3: ORB is a *structure* specialist, not a *geometric* one
+
+§4 framed ORB as owning "crop/rotate/scale/reposition". The full test-split
+per-category detection (at `t=16`) shows that was too narrow:
+
+| category | detected | §4's filing |
+|---|---|---|
+| exact_copy (control) | 100.0% | — |
+| resize_crop_reposition | 98.3% | ORB's job ✓ |
+| flip_rotate_mirror | 81.7% | ORB's job ✓ |
+| text_logo_emoji | **100.0%** | *not* ORB's job |
+| background_color_change | **98.9%** | *not* ORB's job |
+| color_swap_modify_saturate | 79.8% | not ORB's job |
+| pixelated | **28.5%** | not ORB's job |
+
+Two "not ORB's job" categories score ~100%. Recolouring a background barely moves
+the grayscale structure ORB reads; a logo overlay leaves most of the image
+matchable. **ORB works wherever spatial structure survives and fails in exactly
+one place — where high-frequency detail is destroyed** (pixelation kills the
+intensity gradients corner detection needs; colour-swap is a partial case). This
+also explains why tuning ORB on the global category mix instead of the geometric
+subset costs only **1.4 F1** (t=13 → 88.7 vs t=16 → 90.1): only ~1 category in 6
+truly defeats ORB. **Design consequence for the router (§below):** the signal to
+predict is *"is detail intact?"*, not *"is the manipulation geometric?"*.
+
+### The honest limitation: CryptoPunks
+
+At a clean 9.9% false-positive rate, ORB detects **68.5%** of geometric punk
+copies vs **100%** for azuki/bayc. This is the §4-lesson-1 caveat confirmed on the
+full set: punks are natively 24×24, and upscaling to 256px recovers keypoints but
+cannot create information that was never captured. It is an argument **for** the
+router, not against ORB — no single signal dominates everywhere, so a router that
+recognises a low-resolution punk can lean on the other hashes instead. (An open
+thread: `flip_rotate_mirror` at 81.7% is oddly weaker than crop's 98.3% despite
+explicit mirror handling — partly the punk drag, partly possibly the flip path;
+not yet diagnosed.)
+
+---
+
+## 6. The on-chain storage elephant: a feature-matching signal can't ride in metadata
+
+The paper's central premise (Sec. I) is that detection is *"fully self-contained
+within the blockchain"*: the hashes are stored in the NFT transaction — which it
+states is **300–500 bytes** — and *"each hash value needs several bytes"*, so the
+overhead is *"low ... practical and easy to implement"* (Sec. VI). That claim is
+fair for the four hashes. **It breaks for ORB**, and honesty requires reporting
+this rather than omitting it.
+
+Measured payload per image (60 real originals):
+
+| signal | bytes/image | vs a 400-byte transaction |
+|---|---|---|
+| aHash + pHash + hsvHash | 24 (fixed) | +6% |
+| sHash | 32 (median; 1–10 segments × 8B) | +8% |
+| **ORB @ nfeatures=500** | **14,560** (455 descriptors × 32B) | **+3,640% — 36× the whole tx** |
+
+On-chain, 14.5 KB is ~455 storage slots ≈ **9M gas for a single mint** — roughly a
+third of an Ethereum block, against ~50–70k gas for an ordinary ERC-721 mint.
+
+### `500` was never chosen — and it doesn't even bind
+
+`nfeatures=500` is `cv2.ORB_create`'s default. The original pipeline used 500 in
+its notebooks and 1000 in its scripts — the same parameter, two values, one repo —
+and our unification to 500 was equally unargued. Worse, **the cap never binds**:
+ORB finds ~455 keypoints at 256px, so 500 is a ceiling floating above the real
+count. So we measured how few descriptors ORB actually needs — the
+accuracy-vs-bytes curve, on the geometric subset, each budget given its own
+best (oracle) threshold so the curve's *shape* is what's compared:
+
+| `nfeatures` | actual | bytes | × tx | P | R | F1 | ΔF1 |
+|---|---|---|---|---|---|---|---|
+| 500 (today) | 455 | 14,560 | 36.4× | 90.8% | 90.8% | 90.8% | — |
+| 256 | 242 | 7,760 | 19.4× | 94.2% | 86.1% | 89.9% | −0.9 |
+| **128** | 122 | 3,888 | 9.7× | 96.1% | 80.2% | **87.5%** | −3.3 |
+| 96 | 92 | 2,928 | 7.3× | 96.4% | 77.4% | 85.9% | −4.9 |
+| 64 | 64 | 2,048 | 5.1× | 94.8% | 74.7% | 83.5% | −7.3 |
+| 48 | 46 | 1,488 | 3.7× | 97.1% | 67.8% | 79.8% | −11.0 |
+| 32 | 32 | 1,024 | 2.6× | 90.8% | 65.5% | 76.1% | −14.7 |
+| *24* | *24* | *768* | *1.9×* | *60.1%* | *99.8%* | *75.0* | *−15.8* |
+| *16* | *16* | *512* | *1.3×* | *60.5%* | *96.7%* | *74.4* | *−16.4* |
+
+*Italic rows are degenerate: the best threshold collapsed to 0 ("flag
+everything"). Reference points — trivial flag-all classifier = **75.0%** at this
+base rate; sHash oracle = **76.4%** at **32 bytes**. The oracle protocol is
+validated: the N=500 row (F1 90.8) matches the honest train-tuned number (90.6)
+to +0.2, so the curve reads at face value.*
+
+Readings:
+- **N=500 is the worst point on the curve** — 73% more bytes than N=128 for nothing, since the cap doesn't bind. As payload falls, precision *rises* and recall erodes: ORB becomes a stricter, sparser matcher, which is a *good* property for one vote among four (lost recall is recoverable from the other hashes; lost precision is not).
+- **N=128 is the sweet spot** — 3.7× smaller (14.6 → 3.9 KB) for 3.3 F1, still far above sHash (87.5 vs 76.4).
+- **N=32 is the hard floor** — F1 76.1 ≈ sHash's 76.4, but at **32× the bytes**. Below it ORB is worse on *both* axes at once; by N=24 the threshold degenerates to 0 and the signal is dead.
+
+### Conclusion: architectural, not parametric
+
+Tuning cannot rescue the premise. The best usable point is still ~3.9 KB —
+**~10× a whole transaction**. We reduce the violation from 36× to 10×; we do not
+remove it. **A feature-matching signal cannot ride in transaction metadata at any
+descriptor budget.** The escape routes are all structural, and each forfeits
+something: aggregate the descriptor set into one fixed-size vector (VLAD / BoVW,
+but that sacrifices the RANSAC geometry that makes ORB accurate); store off-chain
+with an on-chain commitment (forfeits "self-contained"); or recompute descriptors
+on demand from the asset. The last is the revealing one — it exposes *why* the
+paper stores hashes on-chain at all: Sec. VI states it is so validators can check
+*"in a reasonable time"* without fetching the image. On-chain hashes are a
+**latency** optimisation, and ORB is too large to buy in at that price. That is a
+genuine finding: the paper's premise has a measured boundary, and we located it.
+
+---
+
+## 7. Known validity caveat
 
 Our manipulations are generated with PIL, so any forensic traces the router learns (e.g.
 histogram "combing" — the missing-bin artifacts integer quantisation leaves behind after a
