@@ -15,3 +15,9 @@ scipy==1.18.0
 # sHash. The headless build is deliberate: the pipeline is offline and never
 # opens a window, so the GUI dependencies are dead weight.
 opencv-python-headless==5.0.0.93
+
+# RandomForest for the Phase C router (predicts manipulation type + confidence
+# from a single query image). Router-only -- never in the hash/parity path, so
+# it touches no bit-exactness claim; the same model family the paper uses, so
+# the router is directly comparable. joblib ships with it (model serialisation).
+scikit-learn==1.9.0
