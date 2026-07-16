@@ -47,6 +47,7 @@ logs/
 # --- Personal working notes, local-only ---
 NEXT_STEPS.md
 NOTES_TO_SELF.md
+PLAN.md
 
 # --- Editor / OS cruft ---
 .vscode/
