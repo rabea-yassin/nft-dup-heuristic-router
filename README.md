@@ -1,274 +1,267 @@
-# NFT Duplication Detection — Heuristic Router
+# NFT Copymint Detection — a Routed, ORB-Augmented Detector
 
-A bare-metal, zero-allocation C11 pre-mint gatekeeper for NFT image duplication detection.
-It sits in front of the multi-hash BK-tree detector described in *"Combating NFT Copymints
-in Blockchain Networks: An Image Hashing Approach"* (Kotzer, Reviriego, Conde Diaz,
-Rottenstreich) and makes its 4-hash query cheaper **without changing the decision rule
-that gives that detector its accuracy.**
+An extension of *"Combating NFT Copymints in Blockchain Networks: An Image Hashing Approach"*
+(Kotzer, Reviriego, Conde Diaz, Rottenstreich). The paper detects copymints by letting four
+perceptual hashes vote at fixed thresholds. We change two things:
 
-> **Status: early.** The C11 router itself (`src/`) hasn't been written yet. What exists
-> so far is the dataset (`data/`) and the offline pipeline that generates labeled
-> manipulation examples from it (`training/`). Directories for later Roadmap steps
-> (`build/`, `logs/`, `third_party/`, `tests/`) are deliberately not created until their
-> step is actually reached, to keep the repo free of empty, unexplained folders.
+1. **We replace `sHash` with ORB feature matching** — because sHash cannot be soundly indexed,
+   and ORB does its job (crop/geometric robustness) substantially better. *Measured, not asserted.*
+2. **We route the signals** — a classifier predicts what was done to a query image, so the
+   detector can stop trusting signals that are known-broken for that manipulation, instead of
+   letting every hash vote unconditionally.
 
-## Background
+Both changes target **accuracy**, not speed.
 
-The reference paper detects NFT copymints by computing four independent perceptual
-hashes for every image — **aHash**, **pHash**, **hsvHash**, **sHash** — each stored in
-its own **BK-tree** (Burkhard-Keller tree) keyed on Hamming distance. Its best-performing
-detector, the *2-Minimal Distance Detector*, queries **all four trees** for every new
-image and flags a duplicate only when **at least two** hashes agree within threshold —
-that cross-corroboration is what suppresses each hash's individual false positives and
-is what makes it the paper's most accurate detector across every dataset it was tested on.
+> **Status.** The four paper hashes are reimplemented in C11 and **bit-exact** against the
+> reference library (see [C11 hash suite](#the-c11-hash-suite-a-completed-result)). The ORB
+> replacement is built and evaluated. The router is built and under evaluation. The final
+> detector (Phase D) is not yet assembled. Full history, findings and numbers live in
+> **[PROGRESS.md](PROGRESS.md)** — this file is the *current architecture*.
 
-That accuracy has a cost: each hash function is only actually discriminative for a subset
-of manipulation types (see the paper's Table III — e.g. `hsvHash` is the only reliable
-signal for flips/rotations, but useless for background-color changes). Querying all four
-trees on every image unconditionally means paying **4×O(log M)** tree-descent cost and
-cache pressure at blockchain scale, even though for most images two or three of those four
-queries were never going to change the outcome.
+---
 
-**Our one non-negotiable constraint: we will not trade away the 2-Minimal detector's
-benchmarked accuracy for speed.** Anything below is only allowed to change *how fast* we
-reach that detector's answer, never *what* the answer is, on any image our fast path isn't
-confident about.
+## Background — what the paper does
 
-## Our Approach
+The paper computes four independent perceptual hashes for every image — **aHash**, **pHash**,
+**hsvHash**, **sHash** — each stored in its own **BK-tree** keyed on Hamming distance. Its
+best-performing detector, the *2-Minimal Distance Detector*, queries all four trees and flags a
+duplicate when **at least two** hashes agree within threshold. That cross-corroboration is what
+suppresses each individual hash's false positives.
 
-Ethereum's move to Proof-of-Stake gives validators a predictable ~12s block window. We use
-part of that budget to make full **pre-mint (conservative) validation** viable, instead of
-the paper's optimistic-execution fallback — by making the common case of routing cheap,
-while keeping the paper's exact detector as a guaranteed fallback for anything ambiguous.
+The weakness we attack is in the *voting*: each hash is only discriminative for a subset of
+manipulations, but **every hash votes on every image anyway**. `hsvHash` on a background-colour
+change is pure noise, yet it still gets a vote. The paper's own future-work section points at
+its spatial/geometric blind spots.
 
-1. **Feature extraction (O(1)–O(N), cache-friendly).** Every incoming image is reduced to
-   a fixed 16-byte feature vector: aspect ratio, Laplacian variance, a quantized
-   histogram-shift bucket, and X-axis center of mass.
-2. **Offline classifier.** A shallow decision tree (trained once, offline, in Python) maps
-   that feature vector to a **confidence-scored prediction** over manipulation types (crop,
-   rotation, color/palette shift, text/logo overlay, pixelation, background change, ...).
-   Critically, it also has to recognize when it *isn't* confident — compound/adversarial
-   manipulations are exactly what a copyminter would combine to defeat a single-hash
-   assumption, and the paper's own Table III separation points were only measured on
-   isolated, single manipulations.
-3. **Codegen, not runtime ML.** The trained tree is walked by a codegen script and compiled
-   into a hardcoded, zero-allocation C `if`/`else` cascade — no ML runtime, no heap
-   allocation, no dynamic dispatch in the hot path.
-4. **Confidence-gated dynamic thresholding ("Strategy B′"), not hard routing.** The cascade
-   never removes a hash's vote outright. Instead:
-   - **High-confidence, clean prediction** → per-hash Hamming thresholds are tuned for the
-     predicted manipulation (per Table III), and hashes the manipulation is known to break
-     have their threshold driven to 0 — effectively disabling them for near-duplicate
-     purposes while still catching pixel-identical hits. Trees are queried **in confidence
-     order**, and the search **short-circuits as soon as two hashes agree**, which is
-     exactly the paper's 2-Minimal rule, just reordered and stopped early rather than
-     replaced.
-   - **Low confidence / ambiguous / suspected compound manipulation** → skip all of the
-     above and fall back to querying all four trees at the paper's **default** thresholds.
-     This is the safety net: on anything the classifier isn't sure about, we inherit the
-     paper's exact, already-benchmarked accuracy rather than gambling on a heuristic.
-   - **A threshold of 0 is served by an O(1) exact-match table, not a BK-tree walk** — a
-     BK-tree searched at distance 0 is just an expensive way to ask "does this exact hash
-     exist," which a hash map answers without a single tree descent.
-   - The **write path is unconditional**: every new image's hashes are inserted into all
-     four trees regardless of what the router predicted for it. Routing only ever affects
-     which trees a *query* consults, never what the index contains — so a future query
-     from a smarter classifier (or the fallback path) can never miss data that today's
-     prediction chose not to look at.
+## What we found
 
-The net effect: average-case cost drops well below 4×O(log M) on confidently-classified
-images (often 1–2 tree descents, sometimes just an O(1) lookup), while worst-case behavior
-on anything ambiguous is *identical* to the paper's benchmarked 2-Minimal detector — never
-worse.
+Three findings drive the design. All three are measured; details and evidence in
+[PROGRESS.md](PROGRESS.md).
+
+**1. sHash cannot be correctly indexed in a BK-tree** *(PROGRESS.md §2)*
+A BK-tree requires a true metric. sHash produces a *variable-length list* of per-segment hashes
+compared by a directional mean-of-minimums — which is **asymmetric** and **violates the triangle
+inequality**. A composite image can act as a "bridge" that makes two unrelated images look
+connected, and pruning can silently discard a real match (a false negative — the worst error class
+here). On the authors' own reference CSV, the `original→copy` direction reproduces their published
+distance on **1,802/1,802** rows while `copy→original` matches only **240** — the asymmetry is not
+hypothetical. Raised with the authors; **tentatively confirmed by Arad, not yet formally resolved.**
+
+**2. ORB beats sHash at sHash's own job** *(PROGRESS.md §5)*
+sHash exists for crop-resistance, and it is precisely the signal that can't be soundly indexed —
+so it is the natural thing to replace. On the geometric subset, ORB scores **F1 90.6%** against
+sHash's **best-case** 76.4%, *while sHash was handed an oracle threshold ORB never got*. Held to
+equal precision, sHash manages **27.2% recall against ORB's 90.0%**. Notably, ORB turns out to be
+a **structure** specialist rather than a narrowly geometric one: it survives everything except the
+destruction of high-frequency detail (pixelation).
+
+**3. A feature-matching signal cannot ride in transaction metadata** *(PROGRESS.md §6)*
+The paper's premise is that detection is "fully self-contained within the blockchain": hashes ride
+in a 300–500 byte transaction. That holds for the four hashes (24–32 bytes). It **breaks** for ORB,
+which emits ~455 descriptors ≈ **14.5 KB — 36× an entire transaction**. We measured the whole
+accuracy-vs-bytes curve; the best usable point is still ~10× a transaction. This is an
+**architectural** boundary, not a tuning problem, and we report it as a finding rather than
+omitting it.
+
+## Architecture
+
+```
+query image
+  │
+  ├─ 93 absolute single-image features ─► RandomForest ─► P(manipulation class)
+  │                                                         │
+  │                                                         └─► soft reliability mass:
+  │                                                              P(detail broken)   → distrust ORB
+  │                                                              P(colour changed)  → distrust hsvHash
+  │
+  └─ signals:  aHash │ pHash │ hsvHash │ ORB
+                  └────────► ≥2 agree ⇒ duplicate  (the paper's rule, with routed thresholds;
+                                                    static fallback when the router is unsure)
+```
+
+**The router is for accuracy.** It predicts the manipulation from the query, then drops or
+discounts signals that manipulation is known to break. When it isn't confident, it falls back to
+the paper's static thresholds — so the routed detector should never be *worse* than the paper's.
+
+**Reliability is derived from soft probabilities, not a hard label.** The router outputs a
+probability *vector* over 8 classes; reliability is read as probability mass (e.g.
+`P(detail broken) = P(pixelated)`), so a router torn between two classes discounts a signal
+*partially* rather than flipping it on a coin-toss.
+
+**Which hash each flag gates is measured, not assumed** (`python/router/hash_reliability.py`).
+It is easy to guess wrong here: pixelation destroys ORB, but aHash/pHash *coarsen* the image in
+much the same way pixelation does and survive it — so distrusting them on pixelation would switch
+off the very signals that still work.
+
+**The architectural asymmetry is the point.** The paper's design silently assumes every signal is
+one binary string in a BK-tree. ORB emits a *set* of binary descriptors, so it needs **LSH**, not a
+BK-tree. (A KD-tree would imply SIFT's 128-D float descriptors, and KD-trees degrade toward linear
+scan at that dimensionality — hence FLANN's randomized KD-*forests*.) **The descriptor type
+dictates the index structure**, and that is the real cost of closing the geometric blind spot.
+
+## The C11 hash suite — a completed result
+
+Before the project pivoted to Python, all four paper hashes (plus dHash, a prerequisite) were
+reimplemented from scratch in C11 and validated to be **bit-exact** against Johannes Buchner's
+[`imagehash`](https://github.com/JohannesBuchner/imagehash) — the library that produced the paper's
+own published numbers.
+
+| Hash | Size | Parity | Notes |
+|------|------|--------|-------|
+| aHash | 64-bit | bit-tolerant | 8×8 grayscale, mean threshold |
+| pHash | 64-bit | bit-tolerant | 32×32 → DCT low-freq 8×8, median threshold |
+| hsvHash | 42-bit | **bit-exact** | port of `colorhash()`; global HSV histogram |
+| dHash | 64-bit | **bit-exact** | 9×8 horizontal gradient; sHash's per-segment hash |
+| sHash | list | **bit-exact** | port of `crop_resistant_hash()` |
+
+Validated on 600 distinct images (including all 402 of the authors' own reference images and
+synthetic edge cases); for sHash this matched the **full ordered segment list**, not a summary.
+`shash_paper_distance` reproduced **all 1,802 rows** of the authors' reference CSV. ASan + UBSan
+clean. Two things made this hard, both documented in [PROGRESS.md](PROGRESS.md) §1: Pillow's
+**float/double literal trap** (its locals are `float` but its literals are `double`, so the
+arithmetic silently runs at double precision), and resolving ambiguities the paper's prose left
+open by reading the library's actual C source rather than trusting its description.
+
+**This work is preserved, not extended.** A C11-vs-Python speed comparison isn't a defensible claim
+for a formal write-up, and duplicating logic in two languages before the idea is proven is wasted
+effort — so the project is **Python-only from here**. The C11 suite stands as a genuine validated
+result, and its sHash port is what produced Finding #1. Per-hash design notes live in each
+`src/hashes/<name>/README.md`.
 
 ## Toolchain
 
-The runtime stays hand-written C11. The reasoning, and where we deliberately *don't*
-reinvent the wheel, matters enough to spell out:
+Python only. `imagehash` is the reference implementation the paper itself used, so we use it
+directly rather than maintaining a second reimplementation.
 
-- **Why not just use Johannes Buchner's [`imagehash`](https://github.com/JohannesBuchner/imagehash)
-  directly?** It already implements `average_hash`/`phash`/`colorhash`/`crop_resistant_hash`
-  — what the paper's aHash/pHash/hsvHash/sHash experiments actually ran on (paper: "these
-  hash algorithms have an available Python implementation by Buchner") — and is well-tested.
-  One correction worth flagging: the paper's Section II-C(v) *describes* hsvHash as a
-  block/region-based statistical hash (citing Tang et al. 2013), but `colorhash()` is
-  actually a **global** histogram (fractions of black/gray/hue-binned-saturated pixels
-  across the whole image) — a different algorithm than the cited paper's, not just a
-  looser implementation of it. Since the paper doesn't reproduce Tang et al.'s algorithm in
-  enough detail to reimplement from scratch, and its published numbers were produced by
-  whatever Buchner's library actually does, we port `colorhash()`'s real algorithm, not the
-  block/region description. It's pure PIL/numpy/scipy, and embedding a Python interpreter
-  (or shelling out per image) into a
-  validator's hot path reintroduces interpreter startup cost, GIL contention, and
-  unpredictable allocation — precisely what a zero-allocation, sub-millisecond router is
-  trying to eliminate. It's also not an optimized C core under the hood we could just bind
-  to; it's general-purpose array code, not something built for cache efficiency.
-- **So `imagehash` isn't discarded — it's repurposed to two places it's actually a good
-  fit for, and kept out of the one place it isn't:**
-  1. **Differential-test oracle.** A fixed image corpus (covering the paper's manipulation
-     categories) is run through `imagehash` once, offline, and the outputs are frozen into
-     a checked-in fixture. Our C11 implementations are tested against that fixture — no
-     live Python dependency at build or test time, only when fixtures are deliberately
-     regenerated.
-  2. **Training-data generator.** The offline classifier already needs a Python + scikit-learn
-     environment; `training/` calls `imagehash` directly to produce labeled hash/feature
-     data rather than maintaining a second, redundant Python reimplementation.
-  3. **Never in the runtime binary.** No Python dependency at all in the shipped router.
-- **Parity target is per-hash, and it's statistical, not literal, only where the reference
-  algorithm itself isn't fully known:**
-  - `aHash`/`pHash`: simple, fully-specified pixel operations — bit-exact parity is a
-    realistic goal if we match PIL's exact resize filter and luma coefficients, with a
-    small Hamming-distance tolerance accepted as passing.
-  - `hsvHash`: once the ambiguity above is resolved (porting `colorhash()`'s actual
-    algorithm), bit-exact parity is realistic here too — it's a fully deterministic global
-    histogram over quantized HSV fractions, no different in principle from aHash/pHash.
-    The one genuine imprecision-tolerant step is our own RGB->HSV conversion needing to
-    match PIL's specific 0-255-scaled H/S/V convention (not the more common 0-360 degree
-    convention for hue) — get that right and the rest is exact arithmetic.
-  - `sHash`: if our segmentation approach differs from `crop_resistant_hash`'s internals
-    (see below), comparing against the Python fixture stops being meaningful for this hash.
-    Ground truth shifts to the paper's own published numbers directly.
-- **`sHash`'s segmentation step is an open engineering call, not yet decided:** a
-  hand-rolled flood-fill/union-find connected-components pass (simple, no external runtime
-  dependency, consistent with the project's zero-allocation ethos) is the current default
-  to prototype first. Pulling in OpenCV's connected-components/contour detection is a
-  fallback only if early testing shows our segmentation quality is actually costing us
-  accuracy — `sHash`'s entire value is segmentation quality (it's the paper's best cropping-
-  robustness hash), so this is worth a real spike rather than deciding abstractly.
-- **Versions used to generate parity fixtures / training data are pinned** (`imagehash`,
-  Pillow, numpy, scipy) in `training/requirements.txt`, since a future default-filter change
-  in any of those libraries would silently shift what "matching the paper" even means.
+- **The `colorhash()` correction.** The paper's §II-C(v) *describes* hsvHash as a block/region
+  statistical hash citing Tang et al. 2013 — but `colorhash()` is actually a **global** histogram
+  (fractions of black/gray/hue-binned-saturated pixels across the whole image), a different
+  algorithm entirely. Since the paper's published numbers were produced by whatever the library
+  actually does, we port `colorhash()`'s real algorithm, not the prose description.
+- **Pinned versions** (`training/requirements.txt`) — a future default-filter change in Pillow or
+  numpy would silently shift what "matching the paper" even means. `scikit-learn` is **router-only
+  and never in the hash path**, so it cannot touch any bit-exactness claim.
 
-| Concern                | Choice                                                          |
-|-------------------------|------------------------------------------------------------------|
-| Core language           | C11 — zero-allocation hot path, no RAII/template indirection    |
-| Build system            | CMake (out-of-source build in `build/`)                          |
-| Offline training        | Python 3 + scikit-learn (shallow `DecisionTreeClassifier`)       |
-| Reference/training hashes | Buchner's `imagehash`, used directly (not reimplemented) — differential-test oracle + training-data generator only, never in the runtime binary |
-| Codegen                 | `training/codegen.py` walks the trained tree → emits `src/router/generated_cascade.h`, which **is committed** so the C project builds standalone without a Python dependency at build time |
-| BK-tree distance metric | Hamming distance over fixed-width hash ints (popcount)           |
-| Zero-threshold queries  | O(1) exact-match hash table, bypassing the BK-tree entirely      |
+| Concern | Choice |
+|---|---|
+| Language | Python 3.12 (`training/.venv`) |
+| Hash values | Buchner's `imagehash` (our C11 port is bit-exact to it, so values are identical either way) |
+| Geometric signal | OpenCV ORB → BFMatcher(Hamming, crossCheck) → RANSAC homography inlier count |
+| Router | scikit-learn `RandomForestClassifier` → `predict_proba` (the paper's model family) |
+| Index (discussion only) | ORB ⇒ LSH; BK-tree ⇒ the fixed-width hashes. Not on the evaluation path — we score **pairwise**. |
 
-## Repository Structure
+**Why pairwise, not retrieval.** We compare `original_image` against `copy_image` directly. This
+matches the dataset's own schema (**`is_copy` labels a *pair*, not an image**), the paper's
+methodology, and how the four hashes are evaluated — and it removes the gallery from the accuracy
+path entirely, which is what invalidated an earlier baseline (PROGRESS.md §4). The LSH gallery
+survives as a *scalability* discussion, not an accuracy claim.
+
+## Repository structure
 
 ```
 .
-├── src/
-│   ├── features/     # 16-byte feature vector extraction (aspect ratio, Laplacian
-│   │                 # variance, histogram-shift bucket, center of mass)
-│   ├── hashes/       # One directory per hash (C11), each with its own README:
-│   │   ├── common/   #   shared: box-filter downsample (aHash/pHash) + bit-exact
-│   │   │             #   Pillow op ports (dHash/sHash) — see common/README.md
-│   │   ├── ahash/    #   average hash (64-bit)
-│   │   ├── phash/    #   perceptual/DCT hash (64-bit)
-│   │   ├── hsvhash/  #   global HSV color histogram (42-bit, bit-exact colorhash)
-│   │   ├── dhash/    #   difference hash (64-bit); sHash's per-segment hash_func
-│   │   └── shash/    #   segmentation hash (list of dHashes, crop-resistant)
-│   ├── bktree/       # Generic BK-tree over fixed-width hashes + Hamming distance
-│   │                 # (instantiated once per hash type), plus the O(1) exact-match
-│   │                 # table used when a query's threshold is 0
-│   ├── router/       # Confidence-gated dispatch (Strategy B′) + generated_cascade.h
-│   │                 # (committed, codegen output)
-│   └── bench/        # Benchmark harness: baseline 4x-probe vs router (avg/worst case)
-├── training/                    # Offline Python pipeline (own venv, see requirements.txt)
-│   ├── requirements.txt         # Pinned Pillow/numpy (+ imagehash/scikit-learn later)
-│   ├── manipulations.py         # OpenSea-copymint manipulation functions (see Dataset)
-│   └── generate_dataset.py      # Builds data/train/ + data/test/ from data/raw/
-└── data/
-    ├── raw/                     # Balanced real NFT corpus (see Dataset) — gitignored
-    ├── extra/                   # 10k CryptoPunk sprites, held out of raw/ — gitignored
-    ├── reference/                # Borrowed/derived reference material — gitignored
-    │   ├── nft_classifier.csv    #   id -> collection mapping (source of raw/'s naming)
-    │   └── test_manipulations/   #   paper authors' own labeling/hash reference set
-    ├── example/                  # Git-tracked: full pipeline on 2 images (see Dataset)
-    │   ├── raw/                  #   1 random Azuki + 1 random BAYC source image
-    │   └── generated/            #   generate_dataset.py's output on just those 2
-    ├── train/                    # Generated by generate_dataset.py — gitignored
-    └── test/                     # Generated by generate_dataset.py — gitignored
-
-Not yet created (appear at their Roadmap step): build/, logs/, third_party/, tests/
+├── PROGRESS.md          # The project's history, findings and numbers (report material)
+├── README.md            # This file: the current architecture
+├── src/hashes/          # C11 hash suite (complete, bit-exact, preserved — not extended)
+│   ├── common/          #   shared Pillow op ports + box-filter downsample
+│   ├── ahash/  phash/   #   64-bit
+│   ├── hsvhash/         #   42-bit, bit-exact colorhash
+│   ├── dhash/           #   64-bit; sHash's per-segment hash_func
+│   └── shash/           #   segment list + the paper's mean-of-mins distance
+├── python/
+│   ├── geometric/       # The ORB signal that replaces sHash
+│   │   ├── orb_match.py         #   pairwise ORB→RANSAC inlier score (the signal)
+│   │   ├── score_dataset.py     #   cached expensive scoring pass → data/<split>/orb_scores.csv
+│   │   ├── tune.py              #   threshold tuning (geometric subset vs global)
+│   │   ├── evaluate.py          #   per-category / per-collection metrics
+│   │   ├── shash_baseline.py    #   sHash scores, for the swap comparison
+│   │   ├── compare_shash.py     #   ORB vs sHash — the evidence for the swap
+│   │   ├── descriptor_budget.py #   accuracy-vs-bytes curve (--budgets: live demo knob)
+│   │   ├── verify_baseline.py   #   proof the old baseline measured gallery membership
+│   │   └── original/            #   teammate's initial pipeline, imported as-is (reference)
+│   └── router/          # The router: predicted manipulation → signal reliability
+│       ├── features.py          #   93 absolute single-image descriptors
+│       ├── extract_features.py  #   cached pass → data/<split>/router_features.csv
+│       ├── train_router.py      #   RandomForest → class probabilities + confidence
+│       ├── evaluate_router.py   #   confusion matrix, reliability metrics, per-collection
+│       └── hash_reliability.py  #   measures which hash each manipulation actually breaks
+├── training/            # Dataset generation (see Dataset below)
+├── data/                # Gitignored except data/example/
+└── third_party/         # stb_image.h (C11 PNG decode)
 ```
+
+> `src/bench/`, `src/bktree/`, `src/features/` and `src/router/` are empty `.gitkeep` placeholders
+> left from the original C11 plan (a codegen'd, zero-allocation router). That plan is abandoned;
+> the directories are vestigial and can be removed.
 
 ## Dataset
 
-Three sources feed `data/` (all gitignored except `data/example/`, see below):
+Three sources feed `data/` (all gitignored except `data/example/`):
 
-- **[`tunguz/cryptopunks`](https://www.kaggle.com/datasets/tunguz/cryptopunks)** (Kaggle) —
-  10,000 CryptoPunk sprites; this is the exact dataset the paper itself cites (footnote 2)
-  for its Table V CryptoPunics evaluation. **Held in `data/extra/` as `cryptopunks#<id>.png`,
-  deliberately kept out of `raw/`:** at 10,000 images against 1,000 each of the other three
-  collections, including it in the training corpus would let CryptoPunks-specific visual
-  patterns dominate the router's classifier and tilt it toward whatever discriminates a
-  CryptoPunk sprite rather than what discriminates a manipulation type. It's kept around in
-  `extra/` for later large-scale/stress testing (e.g. BK-tree scaling, Table VII-style
-  timing) where raw volume matters more than class balance.
-- **[`shaunmak/nft-classifier`](https://www.kaggle.com/datasets/shaunmak/nft-classifier)**
-  (Kaggle) — 3,000 real images spanning three collections (Azuki, BAYC, CryptoPunks), 1,000
-  each — this balanced set is what actually populates `data/raw/`. The images are
-  numerically named with no collection info in the filename; `data/reference/nft_classifier.csv`
-  is the only thing that maps each numeric id to its collection, kept as the record of where
-  the naming came from. Flattened into `data/raw/` as `azuki_#<id>.png`, `bayc_#<id>.png`,
-  `cp_#<id>.png` (`#<id>` = the numeric filename, looked up against the CSV; index `#0` has
-  no corresponding image in the download and was skipped). These are real, unmanipulated
-  images — the base corpus `training/generate_dataset.py` manipulates to build labeled
-  training data.
-- **`data/reference/test_manipulations/`** — obtained directly from the paper's authors, *not*
-  a public Kaggle set. Treated as a **reference, not a training set**: 405 manipulated
-  CryptoPunk images plus `final_test_metadata.csv` (1,803 rows) giving `(original, copy,
-  is_copy, manipulation type)` pairs with the authors' own precomputed hash values and
-  Hamming distances per pair. Shows exactly how the authors structured labeling and hash
-  computation for their own evaluation, and is authoritative enough to double as a
-  differential-test fixture for our C11 hash implementations later — but since it was
-  borrowed informally rather than published, it stays local and shouldn't be redistributed
-  or used as the basis of any results we publish without checking with the authors first.
+- **[`shaunmak/nft-classifier`](https://www.kaggle.com/datasets/shaunmak/nft-classifier)** (Kaggle)
+  — 3,000 real images across three collections (Azuki, BAYC, CryptoPunks), 1,000 each. This
+  balanced set populates `data/raw/`, flattened as `azuki_#<id>.png` / `bayc_#<id>.png` /
+  `cp_#<id>.png`. `data/reference/nft_classifier.csv` is the only thing mapping each numeric id to
+  its collection, kept as the record of where the naming came from.
+- **[`tunguz/cryptopunks`](https://www.kaggle.com/datasets/tunguz/cryptopunks)** (Kaggle) — 10,000
+  CryptoPunk sprites; the exact dataset the paper cites for its Table V evaluation. Held in
+  `data/extra/`, **deliberately out of `raw/`**: at 10,000 against 1,000 each of the others, it
+  would let punk-specific patterns dominate the router's classifier rather than what actually
+  discriminates a manipulation. Kept for later scale/stress testing.
+- **`data/reference/test_manipulations/`** — obtained **directly from the paper's authors**, not a
+  public set: 405 manipulated CryptoPunk images plus a 1,802-row CSV of
+  `(original, copy, is_copy, manipulation)` pairs with the authors' own precomputed hashes and
+  distances. It doubles as a differential-test fixture and as a **cross-generator check** for the
+  router (see below). **Shared informally — it stays local, is not redistributed, and no published
+  result may rest on it without checking with the authors first.**
 
-**`data/example/` is the one exception to "all of `data/` is gitignored."** It's a tiny,
-git-tracked demo (public Kaggle-sourced images only — nothing derived from
-`test_manipulations/`) showing the full pipeline end to end on just 2 images (one random
-Azuki, one random BAYC): `example/raw/` holds the 2 source images, and
-`example/generated/` holds the result of running `training/generate_dataset.py`'s logic on
-exactly those 2 — the downscaled originals, every manipulated variant, and a `metadata.csv`
-in the same schema as the real `data/train/`/`data/test/` output. It's what the pipeline
-produces, visible on GitHub, without shipping the full 75,000-pair corpus.
+**`data/example/` is the one exception to "all of `data/` is gitignored"** — a tiny, git-tracked
+demo (public Kaggle images only) running the full pipeline end-to-end on 2 images, so the layout
+and output schema are visible on GitHub without shipping the full corpus.
 
-### Labeled training data (`training/generate_dataset.py`)
+### Labeled data (`training/generate_dataset.py`)
 
-`data/raw/`'s 3,000 images have no manipulation labels on their own, but the router's
-decision tree needs them to train. `training/generate_dataset.py` builds them: for every
-base image it applies each of the paper's OpenSea-copymint categories (flip/rotate/mirror,
-crop/resize/reposition, text/logo/emoji overlay, background-color change, pixelation,
-color swap/saturate, plus an exact-copy control) via `training/manipulations.py`, downscales
-everything to a `--max-dim` (default 256px, aspect-ratio-preserving — aspect ratio is one of
-the router's own features, so it must survive this step) to keep the generated set small and
-fast to iterate on, and writes both the images and a `metadata.csv`
-(`original_image,copy_image,manipulation_type,is_copy`) per split into `data/train/` and
-`data/test/`. Splitting happens **by base image before any manipulation is applied**, so a
-given image's variants never cross the train/test boundary. One non-duplicate (negative)
-pair per base image is generated too, matching the paper's own evaluation methodology.
+`data/raw/`'s images carry no manipulation labels, so we generate them: for every base image, apply
+each of the paper's OpenSea-copymint categories — flip/rotate/mirror, crop/resize/reposition,
+text/logo/emoji overlay, background-colour change, pixelation, colour swap/saturate, plus an
+exact-copy control — then downscale to `--max-dim` (default 256px, aspect-preserving) and write the
+images plus a `metadata.csv` (`original_image,copy_image,manipulation_type,is_copy`) per split.
 
-Run it (from the repo root, using the pinned venv):
-```
+Splitting happens **by base image before any manipulation is applied**, so an image's variants never
+cross the train/test boundary. Non-duplicate (negative) pairs are generated too, matching the
+paper's methodology.
+
+Current corpus (default flags): **train** 2,400 base images → 48,000 images / 55,200 rows;
+**test** 600 base → 12,000 images / 13,800 rows.
+
+```bash
 python3 -m venv training/.venv && training/.venv/bin/pip install -r training/requirements.txt
 training/.venv/bin/python training/generate_dataset.py
 ```
 
+**Validity caveat.** Our manipulations are PIL-generated, so any forensic trace the router learns
+(e.g. histogram "combing" — the missing-bin artifacts integer quantisation leaves after a
+brightness edit) is partly **generator-specific**. A rich classifier could learn *how our dataset
+was made* rather than how real copymints behave. Mitigation: the router is also evaluated against
+the authors' `test_manipulations/` set, a different generator.
+
 ## Roadmap
 
-1. ~~Assemble labeled dataset under `data/`~~ — done via `training/generate_dataset.py`
-2. Implement `aHash`/`pHash`/`hsvHash`/`sHash` in C11 (`src/hashes/`)
-3. Implement the generic BK-tree + O(1) exact-match table (`src/bktree/`)
-4. Implement the 16-byte feature extractor (`src/features/`)
-5. Build the `imagehash`-backed parity fixture generator and differential tests
-   (`training/generate_parity_fixtures.py`, `tests/parity/` — created at this step, not before)
-6. Train the shallow, confidence-aware decision tree + build the codegen script (`training/`)
-7. Generate `src/router/generated_cascade.h` and wire up Strategy B′ dispatch (fallback
-   path, confidence gating, early-exit ordering) in `src/router/`
-8. Prototype `sHash` segmentation (hand-rolled flood-fill vs. OpenCV) and decide based on
-   measured accuracy, not assumption
-9. Build the baseline-vs-router benchmark (`src/bench/`) and validate both the accuracy
-   parity (never worse than the paper's 2-Minimal detector) and the average-case speedup
+| Phase | Status |
+|---|---|
+| Reimplement the paper's hashes in C11, bit-exact | ✅ done (preserved, not extended) |
+| **A** — Document the C11 work, the sHash finding, and the pivot | ✅ done |
+| **B** — ORB pipeline replacing sHash: pairwise signal, tuning, per-category eval, sHash comparison, descriptor-budget curve | ✅ done |
+| **C** — The router: 93 absolute features → RandomForest → manipulation + soft reliability | 🔧 built, under evaluation |
+| **D** — The routed detector: dynamic thresholds over {aHash, pHash, hsvHash, ORB}, ≥2-agree, static fallback | ⬜ next |
+| Deferred | sHash's index structure (awaiting the authors' reply → a documented finding) |
+
+Phase D's deliverable is a **three-way comparison** that isolates each contribution:
+1. static 4-hash **with sHash** — the paper's baseline,
+2. static **with ORB** replacing sHash — isolates the *swap's* gain,
+3. **router-driven** dynamic thresholds + ORB — isolates the *router's* gain.
 
 ## Reference
 
-A. Kotzer, P. Reviriego, J. Conde Diaz, O. Rottenstreich, *"Combating NFT Copymints in
-Blockchain Networks: An Image Hashing Approach."*
+A. Kotzer, P. Reviriego, J. Conde Diaz, O. Rottenstreich, *"Combating NFT Copymints in Blockchain
+Networks: An Image Hashing Approach."*
