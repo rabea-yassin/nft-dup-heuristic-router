@@ -405,18 +405,33 @@ genuine finding: the paper's premise has a measured boundary, and we located it.
 
 ---
 
-## 7. Known validity caveat
+## 7. Known caveats and methodology deviations
 
-Our manipulations are generated with PIL, so any forensic traces the router learns (e.g.
-histogram "combing" — the missing-bin artifacts integer quantisation leaves behind after a
-brightness or saturation edit) are partly **generator-specific**. A sufficiently rich classifier
-may learn *how our dataset was made* rather than how real copymints behave.
+### 7.1 Our manipulations are PIL-generated
+
+Any forensic trace the router learns (e.g. histogram "combing" — the missing-bin artifacts
+integer quantisation leaves behind after a brightness or saturation edit) is partly
+**generator-specific**. A sufficiently rich classifier may learn *how our dataset was made*
+rather than how real copymints behave.
 
 Mitigation: also evaluate against the authors' `data/reference/test_manipulations/` set (405 real
 manipulated images plus their metadata CSV), which we hold and have already validated against.
 This set was shared with us informally, so it stays local and is not redistributed.
 
-**Update: this caveat was not hypothetical — §8.3 measures it, and it bites.**
+**Update: this caveat was not hypothetical — §8.4 measures it, and it bites.**
+
+### 7.2 Our train/test split inverts the paper's, deliberately
+
+`generate_dataset.py --train-frac` defaults to **0.8** (80% train / 20% test), the conventional
+ML split. The paper does the **opposite**: Section IV-D trains on 20% of DISC21 and tests on 80%.
+
+The difference is justified by what "training" means in each case. The paper's training step only
+tunes **a handful of scalar Hamming thresholds** per hash, which needs very little data — so
+reserving 80% for test buys a statistically powerful evaluation of its published numbers. We train
+an actual **RandomForest over 93 features across 8 classes**, which benefits from more examples
+than a few scalars do. Hence more data in train, not test.
+
+Configurable via `--train-frac` if the paper's exact split is ever wanted for comparability.
 
 ---
 

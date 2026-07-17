@@ -44,9 +44,9 @@ logs/
 # --- Deploy key (repo-scoped SSH auth, never commit) ---
 .deploy_key/
 
-# --- Personal working notes, local-only ---
-NEXT_STEPS.md
-NOTES_TO_SELF.md
+# --- Personal working note, local-only ---
+# The single live working doc: status + next actions + vocabulary.
+# Findings belong in PROGRESS.md (tracked), never duplicated here.
 PLAN.md
 
 # --- Editor / OS cruft ---
