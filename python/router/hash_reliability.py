@@ -1,39 +1,56 @@
-"""Per-hash x per-category reliability map -- measure it, don't assume it.
+"""Per-signal x per-category reliability map -- measure it, don't assume it.
 
-Phase D wants to drop signals known-broken for a predicted manipulation. We have
-only ever scored ORB and sHash per category (PROGRESS.md 5). Before Phase D
-hardcodes which hashes each router flag gates, this does the cheap analogous pass
-for the three binary hashes so the gating is grounded in measurement.
+Phase D wants to drop signals known-broken for a predicted manipulation. We had
+only ever scored ORB and sHash per category (PROGRESS.md 5). This does the
+analogous pass for the three binary hashes so the gating is grounded in
+measurement -- e.g. pixelation destroys ORB, so it is tempting to distrust pHash
+too, but pHash coarsens to 32x32 -> low-frequency DCT the same way pixelation
+does and may well SURVIVE it. That is an empirical question, and this answers it.
 
-Why this matters concretely: pixelation destroys ORB (28.5% detection), so it is
-tempting to also distrust pHash under pixelation. But pHash coarsens the image to
-32x32 -> low-frequency DCT the same way pixelation does, so it may well SURVIVE
-pixelation. That is an empirical question, and this answers it.
+The hashes come from Buchner's imagehash -- the exact oracle our C11 ports were
+validated bit-exact against -- so this is Python-only and adds no C11:
+    aHash = average_hash, pHash = phash, hsvHash = colorhash
+All three are DISTANCES (flag when dist <= t), opposite polarity to ORB's inlier
+count. Unlike ORB they resize internally, so they impose no minimum resolution.
 
-The hashes are computed with Buchner's imagehash -- the exact oracle our C11
-ports were validated bit-exact against -- so this is Python-only and adds no C11:
-    aHash    = imagehash.average_hash
-    pHash    = imagehash.phash
-    hsvHash  = imagehash.colorhash
-All three are DISTANCES: a pair is flagged a duplicate when dist <= threshold
-(opposite polarity to ORB's inlier count). Unlike ORB, the hashes resize
-internally, so they impose no minimum resolution -- no normalisation needed.
+TWO MEASUREMENTS, because detection alone cannot tell you whether dropping a
+signal helps:
 
-Two stages, like score_dataset.py (cache) + evaluate.py (report):
-  * caches data/<split>/hash_scores.csv (per-pair Hamming distances), computed
-    once; hashes are memoised per filename since originals recur across rows.
-  * prints a per-hash x per-category detection table at each hash's best (oracle)
-    threshold, with the cached ORB column alongside for a complete four-signal map.
+  * detection -- of true category-X copies, how often does the signal fire?
+  * FP on MANIPULATED negatives -- when the query is a category-X image and the
+    candidate is the WRONG original, how often does the signal fire anyway?
+
+That second axis is the silent/noisy distinction, and it is what decides whether
+routing buys anything. A signal that is broken but SILENT (low detection, low FP)
+simply abstains; dropping it cannot change a ">=2 agree" verdict, because it was
+never voting. A signal that is broken and NOISY (low detection, high FP) votes at
+random, and dropping it protects precision. Only the second is worth gating.
+
+The manipulated negatives have to be constructed: the dataset's own negatives are
+all *pristine* NFTs paired with an unrelated original, so they can only tell us
+how a signal behaves on an untouched query. Pairing each manipulated copy against
+a deterministically-chosen wrong original fills that gap. (That our negatives are
+pristine-only is itself a dataset-design limitation -- the authors' reference set
+does contain manipulated negatives.)
+
+THRESHOLDS ARE DERIVED ON TRAIN, NEVER ON TEST. Picking an operating point on the
+split you then report is the same methodology error that invalidated the imported
+baseline (PROGRESS.md 4). `--split train` writes the thresholds; `--split test`
+loads them and reports. Each signal is placed at a fixed <=10% FP budget on the
+pristine negatives rather than by an F1 sweep, so every signal is read at the same
+operating point and the columns are comparable (ORB's t=16 sits at ~13% FP).
 
 Usage:
+    training/.venv/bin/python python/router/hash_reliability.py --split train
     training/.venv/bin/python python/router/hash_reliability.py --split test
-    training/.venv/bin/python python/router/hash_reliability.py --split test --recompute
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
+import random
 import sys
 import time
 from pathlib import Path
@@ -43,7 +60,6 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "geometric"))
 from categories import (  # noqa: E402
-    ALL_POSITIVES,
     CONTROL_POSITIVES,
     GEOMETRIC_POSITIVES,
     NEGATIVES,
@@ -51,155 +67,200 @@ from categories import (  # noqa: E402
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FIELDS = ["original_image", "copy_image", "manipulation_type", "is_copy",
-          "ahash_dist", "phash_dist", "hsvhash_dist"]
-# Distance grids: aHash/pHash are 64-bit, hsvHash is 42-bit.
-GRIDS = {"ahash_dist": range(0, 65), "phash_dist": range(0, 65), "hsvhash_dist": range(0, 43)}
-HASH_LABEL = {"ahash_dist": "aHash", "phash_dist": "pHash", "hsvhash_dist": "hsvHash"}
+SIGNALS = ("ahash", "phash", "hsvhash")
+LABEL = {"ahash": "aHash", "phash": "pHash", "hsvhash": "hsvHash"}
+BITS = {"ahash": 64, "phash": 64, "hsvhash": 42}
+FP_BUDGET = 0.10
 ORB_THRESHOLD = 16  # the geometric signal's train-tuned operating point (PROGRESS.md 5)
+NEGATIVE_PAIR_SEED = 20260717
 
 
-def compute_cache(split_dir: Path) -> Path:
-    images_dir = split_dir / "images"
-    with open(split_dir / "metadata.csv", newline="") as f:
-        rows = list(csv.DictReader(f))
+def to_int(h) -> int:
+    v = 0
+    for bit in h.hash.flatten():
+        v = (v << 1) | int(bit)
+    return v
 
-    cache: dict[str, tuple] = {}
 
-    def hashes(filename: str) -> tuple:
-        if filename not in cache:
-            with Image.open(images_dir / filename) as im:
-                cache[filename] = (
-                    imagehash.average_hash(im),
-                    imagehash.phash(im),
-                    imagehash.colorhash(im),
+def hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def image_hashes(split_dir: Path, images: list[str]) -> dict[str, tuple[int, int, int]]:
+    """image -> (aHash, pHash, hsvHash) as ints. Cached: hashing is the only slow part,
+    and caching per IMAGE (not per pair) lets us form arbitrary pairs for free."""
+    cache_path = split_dir / "image_hashes.csv"
+    cache: dict[str, tuple[int, int, int]] = {}
+    if cache_path.exists():
+        with open(cache_path, newline="") as f:
+            for r in csv.DictReader(f):
+                cache[r["image"]] = (int(r["ahash"], 16), int(r["phash"], 16), int(r["hsvhash"], 16))
+    missing = [i for i in images if i not in cache]
+    if missing:
+        images_dir = split_dir / "images"
+        started = time.time()
+        for n, name in enumerate(missing, start=1):
+            with Image.open(images_dir / name) as im:
+                cache[name] = (
+                    to_int(imagehash.average_hash(im)),
+                    to_int(imagehash.phash(im)),
+                    to_int(imagehash.colorhash(im)),
                 )
-        return cache[filename]
-
-    out_path = split_dir / "hash_scores.csv"
-    started = time.time()
-    with open(out_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        for i, row in enumerate(rows, start=1):
-            o = row["original_image"].strip()
-            c = row["copy_image"].strip()
-            ao, po, ho = hashes(o)
-            ac, pc, hc = hashes(c)
-            writer.writerow({
-                "original_image": o, "copy_image": c,
-                "manipulation_type": row["manipulation_type"].strip(),
-                "is_copy": row["is_copy"].strip(),
-                "ahash_dist": ao - ac, "phash_dist": po - pc, "hsvhash_dist": ho - hc,
-            })
-            if i % 5000 == 0 or i == len(rows):
-                rate = (time.time() - started) / i
-                print(f"  {i}/{len(rows)}  {rate*1000:.1f} ms/pair  "
-                      f"eta {rate*(len(rows)-i)/60:.1f} min", flush=True)
-    print(f"{len(rows)} pairs -> {out_path}  ({(time.time()-started)/60:.1f} min)")
-    return out_path
+            if n % 5000 == 0 or n == len(missing):
+                rate = (time.time() - started) / n
+                print(f"  hashing {n}/{len(missing)}  eta {rate*(len(missing)-n)/60:.1f} min",
+                      flush=True)
+        with open(cache_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["image", "ahash", "phash", "hsvhash"])
+            for name, (a, p, h) in cache.items():
+                w.writerow([name, f"{a:x}", f"{p:x}", f"{h:x}"])
+        print(f"  cached {len(cache)} image hashes -> {cache_path}")
+    return cache
 
 
-def load_rows(path: Path) -> list[dict]:
-    with open(path, newline="") as f:
-        # Derived keys go AFTER the **r splat: is_copy is itself a CSV column, so
-        # splatting last would overwrite the parsed bool with the raw "0"/"1"
-        # string -- and both are truthy, which silently makes every row a positive.
+def load_metadata(split_dir: Path) -> list[dict]:
+    with open(split_dir / "metadata.csv", newline="") as f:
         return [
-            {**r, "category": r["manipulation_type"], "is_copy": r["is_copy"] == "1"}
+            {
+                "original": r["original_image"].strip(),
+                "copy": r["copy_image"].strip(),
+                "category": r["manipulation_type"].strip(),
+                "is_copy": r["is_copy"].strip() == "1",
+            }
             for r in csv.DictReader(f)
         ]
 
 
-FP_BUDGET = 0.10  # operating point: at most this false-positive rate on non_duplicate
+def distances(hashes, a: str, b: str) -> dict[str, int]:
+    ha, hb = hashes[a], hashes[b]
+    return {sig: hamming(ha[i], hb[i]) for i, sig in enumerate(SIGNALS)}
 
 
-def operating_threshold(rows, field, budget=FP_BUDGET) -> tuple[int, float]:
-    """Most-permissive threshold whose FP rate on negatives stays within budget.
-
-    A fixed FP budget rather than an F1 sweep, so that every signal is read at the
-    SAME operating point and the per-category detection rates are comparable across
-    hashes and against ORB (whose t=16 sits at ~13% FP). An F1 sweep would also be
-    a poor objective here: this split is 82.6% positive, which rewards flagging
-    everything.
-
-    Detection and FP both rise monotonically with t (flag when dist <= t), so the
-    largest t within budget maximises detection at that FP.
-    """
-    neg = [int(r[field]) for r in rows if not r["is_copy"]]
-    n_neg = max(1, len(neg))
-    chosen, chosen_fp = GRIDS[field].start, 0.0
-    for t in GRIDS[field]:
-        fp = sum(d <= t for d in neg) / n_neg
-        if fp <= budget:
-            chosen, chosen_fp = t, fp
-        else:
-            break
-    return chosen, chosen_fp
+def derive_thresholds(hashes, rows) -> dict:
+    """Most-permissive threshold per signal whose FP on PRISTINE negatives stays
+    within budget. Detection and FP both rise monotonically with t, so the largest
+    t within budget maximises detection at that FP."""
+    neg = [distances(hashes, r["original"], r["copy"]) for r in rows if not r["is_copy"]]
+    out = {}
+    for sig in SIGNALS:
+        ds = [d[sig] for d in neg]
+        chosen, chosen_fp = 0, 0.0
+        for t in range(0, BITS[sig] + 1):
+            fp = sum(x <= t for x in ds) / max(1, len(ds))
+            if fp <= FP_BUDGET:
+                chosen, chosen_fp = t, fp
+            else:
+                break
+        out[sig] = {"threshold": chosen, "fp_on_pristine": chosen_fp}
+    return out
 
 
-def detection_rate(rows, field, threshold) -> float:
-    return sum(int(r[field]) <= threshold for r in rows) / len(rows) if rows else float("nan")
+def manipulated_negatives(rows) -> list[tuple[str, str, str]]:
+    """(wrong_original, manipulated_copy, category) -- each true copy re-paired
+    against a deterministically chosen original that is NOT its own."""
+    rng = random.Random(NEGATIVE_PAIR_SEED)
+    originals = sorted({r["original"] for r in rows})
+    out = []
+    for r in rows:
+        if not r["is_copy"]:
+            continue
+        wrong = rng.choice(originals)
+        while wrong == r["original"] and len(originals) > 1:
+            wrong = rng.choice(originals)
+        out.append((wrong, r["copy"], r["category"]))
+    return out
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--split", default="test", choices=["train", "test"])
     parser.add_argument("--data-dir", type=Path, default=REPO_ROOT / "data")
-    parser.add_argument("--recompute", action="store_true")
     args = parser.parse_args()
 
     split_dir = args.data_dir / args.split
-    cache_path = split_dir / "hash_scores.csv"
-    if args.recompute or not cache_path.exists():
-        compute_cache(split_dir)
+    rows = load_metadata(split_dir)
+    referenced = sorted({r["original"] for r in rows} | {r["copy"] for r in rows})
+    hashes = image_hashes(split_dir, referenced)
 
-    rows = load_rows(cache_path)
+    thr_path = args.data_dir / "train" / "hash_thresholds.json"
+    if args.split == "train":
+        derived = derive_thresholds(hashes, rows)
+        thr_path.write_text(json.dumps(derived, indent=2))
+        print(f"\nderived on TRAIN -> {thr_path}")
+    else:
+        if not thr_path.exists():
+            raise SystemExit("run --split train first: thresholds must come from train, not test")
+        derived = json.loads(thr_path.read_text())
+        print(f"\nthresholds loaded from TRAIN ({thr_path.name}) -- never fitted on test")
 
-    # Optional ORB column, for a complete four-signal map next to §5.
-    orb_by_pair, orb_present = {}, (split_dir / "orb_scores.csv").exists()
-    if orb_present:
-        for r in load_rows(split_dir / "orb_scores.csv"):
-            orb_by_pair[(r["original_image"], r["copy_image"])] = int(r["orb_inliers"])
+    print("  " + "  ".join(
+        f"{LABEL[s]}<={derived[s]['threshold']} (train FP {derived[s]['fp_on_pristine']:.1%})"
+        for s in SIGNALS) + f"   ORB>{ORB_THRESHOLD}")
 
-    operating = {field: operating_threshold(rows, field) for field in GRIDS}
-    thresholds = {field: t for field, (t, _) in operating.items()}
-    print(f"\nsplit={args.split}   operating points at <={FP_BUDGET:.0%} FP on non_duplicate: " +
-          "  ".join(f"{HASH_LABEL[f]}<={t} (FP {fp:.1%})" for f, (t, fp) in operating.items()) +
-          (f"   ORB>{ORB_THRESHOLD}" if orb_present else ""))
+    # Optional ORB detection column, for a complete four-signal map next to §5.
+    orb = {}
+    orb_path = split_dir / "orb_scores.csv"
+    if orb_path.exists():
+        with open(orb_path, newline="") as f:
+            for r in csv.DictReader(f):
+                orb[(r["original_image"].strip(), r["copy_image"].strip())] = int(r["orb_inliers"])
 
-    print("\nDetection rate by category (each signal at its own <=10% FP operating point):")
-    header = f"  {'category':<28}{'n':>6}" + "".join(f"{HASH_LABEL[f]:>9}" for f in GRIDS)
-    if orb_present:
-        header += f"{'ORB':>9}"
-    print(header)
+    positives = [r for r in rows if r["is_copy"]]
+    pristine_neg = [r for r in rows if not r["is_copy"]]
+    manip_neg = manipulated_negatives(rows)
+
+    def rate(pairs, sig):
+        t = derived[sig]["threshold"]
+        hits = sum(distances(hashes, a, b)[sig] <= t for a, b in pairs)
+        return hits / len(pairs) if pairs else float("nan")
+
+    def orb_rate(pairs):
+        vals = [orb.get(p) for p in pairs]
+        vals = [v for v in vals if v is not None]
+        return sum(v > ORB_THRESHOLD for v in vals) / len(vals) if vals else float("nan")
 
     groups = [
         ("-- ORB's job (geometric) --", sorted(GEOMETRIC_POSITIVES)),
         ("-- control --", sorted(CONTROL_POSITIVES)),
         ("-- not ORB's job --", sorted(NON_GEOMETRIC_POSITIVES)),
-        ("-- negatives (FP rate) --", sorted(NEGATIVES)),
     ]
+
+    print(f"\n[1] DETECTION -- of true category-X copies, how often does the signal fire?")
+    print(f"  {'category':<28}{'n':>6}" + "".join(f"{LABEL[s]:>9}" for s in SIGNALS) +
+          (f"{'ORB':>9}" if orb else ""))
     for title, cats in groups:
         print(f"  {title}")
         for cat in cats:
-            sub = [r for r in rows if r["category"] == cat]
-            if not sub:
+            pairs = [(r["original"], r["copy"]) for r in positives if r["category"] == cat]
+            if not pairs:
                 continue
-            line = f"  {cat:<28}{len(sub):>6}"
-            for field in GRIDS:
-                line += f"{detection_rate(sub, field, thresholds[field]):>8.1%}"
-            if orb_present:
-                orb_hits = [orb_by_pair.get((r["original_image"], r["copy_image"]))
-                            for r in sub]
-                orb_hits = [v for v in orb_hits if v is not None]
-                orb_rate = (sum(v > ORB_THRESHOLD for v in orb_hits) / len(orb_hits)
-                            if orb_hits else float("nan"))
-                line += f"{orb_rate:>8.1%}"
+            line = f"  {cat:<28}{len(pairs):>6}" + "".join(f"{rate(pairs, s):>8.1%}" for s in SIGNALS)
+            if orb:
+                line += f"{orb_rate(pairs):>8.1%}"
             print(line)
+    pairs = [(r["original"], r["copy"]) for r in pristine_neg]
+    print(f"  -- pristine negatives (the classic FP rate) --")
+    line = f"  {'non_duplicate':<28}{len(pairs):>6}" + "".join(f"{rate(pairs, s):>8.1%}" for s in SIGNALS)
+    if orb:
+        line += f"{orb_rate(pairs):>8.1%}"
+    print(line)
 
-    print("\nReading: a high number = that signal still detects that manipulation (trust it);"
-          "\na low number = the manipulation breaks that signal (Phase D should drop it there).")
+    print(f"\n[2] FALSE POSITIVES on MANIPULATED negatives -- query is a category-X image,")
+    print(f"    candidate is the WRONG original. Does the signal fire anyway?")
+    print(f"  {'category':<28}{'n':>6}" + "".join(f"{LABEL[s]:>9}" for s in SIGNALS))
+    for title, cats in groups:
+        print(f"  {title}")
+        for cat in cats:
+            pairs = [(a, b) for a, b, c in manip_neg if c == cat]
+            if not pairs:
+                continue
+            print(f"  {cat:<28}{len(pairs):>6}" + "".join(f"{rate(pairs, s):>8.1%}" for s in SIGNALS))
+
+    print("\nReading [1]: low = the manipulation breaks that signal's detection.")
+    print("Reading [2]: high = the signal is NOISY there (fires on the wrong original), so")
+    print("  dropping it protects precision. Low = it is merely SILENT, and dropping it")
+    print("  cannot change a '>=2 agree' verdict, because it was never voting.")
 
 
 if __name__ == "__main__":

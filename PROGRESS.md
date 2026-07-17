@@ -328,10 +328,44 @@ copies vs **100%** for azuki/bayc. This is the §4-lesson-1 caveat confirmed on 
 full set: punks are natively 24×24, and upscaling to 256px recovers keypoints but
 cannot create information that was never captured. It is an argument **for** the
 router, not against ORB — no single signal dominates everywhere, so a router that
-recognises a low-resolution punk can lean on the other hashes instead. (An open
-thread: `flip_rotate_mirror` at 81.7% is oddly weaker than crop's 98.3% despite
-explicit mirror handling — partly the punk drag, partly possibly the flip path;
-not yet diagnosed.)
+recognises a low-resolution punk can lean on the other hashes instead.
+
+### Resolved: `flip_rotate_mirror` conflates two different attacks
+
+`flip_rotate_mirror` at 81.7% looked oddly weak next to crop's 98.3%, despite ORB's mirror
+handling being explicit. It is now diagnosed, and the cause is our **dataset**, not ORB.
+
+`training/manipulations.py` applies an optional 50/50 h/v mirror **and then always a
+continuous rotation** (`rng.uniform(1, 359)`, expand → transparent corner fill → resize back).
+The angle is never 0, so **the class contains no pure mirrors at all**: every sample is a
+compound *mirror ∘ rotate ∘ resize*. Scoring the components separately (120 test originals,
+40 per collection, ORB at `t=16`):
+
+| transform | detected | median inliers | azuki | bayc | **cp** |
+|---|---|---|---|---|---|
+| **pure mirror** | **100.0%** | **452** | 100% | 100% | **100%** |
+| rotate + resize only | 79.2% | 166 | 100% | 100% | **37.5%** |
+| our `flip_rotate_mirror` | **81.7%** | 162 | 100% | 100% | 45.0% |
+
+*Reproduce with `python/geometric/diagnose_flip.py --split test`.*
+
+**ORB handles mirrors perfectly** — 453 median inliers, essentially an exact-copy match. The
+mirror path was never broken. The whole 81.7% deficit is **CryptoPunks under rotation**
+(37.5%): bicubic rotation plus a LANCZOS resize-back destroys exactly the hard pixel-art edges
+ORB keys on, and a 24×24 punk has no detail to spare. azuki/bayc are 100% on all three.
+
+Two consequences, and the second is a genuine finding:
+
+1. **Our "flip" numbers across this whole project describe *rotate+resize*, not mirroring.**
+   Read `flip_rotate_mirror = 81.7%` as understating ORB on mirrors (100%) and overstating it
+   on punk rotations (37.5%). The same caveat applies to every per-category flip figure,
+   including §8.3's.
+2. **We collapsed a distinction the paper's own data makes.** The authors' reference set keeps
+   these as *separate* categories — `rotation` vs `left_to_right` / `top_to_bottom` — while our
+   generator fuses them into one label. That is a dataset-design error on our side: the two are
+   different attacks with different difficulty (100% vs 37.5% on punks) and, as §8.4 shows,
+   different detectability. A mirror leaves no forensic trace at all; a rotation leaves
+   transparent corners. Merging them hides both facts.
 
 ---
 
@@ -488,39 +522,79 @@ Top features, in importance order, read as a description of the design: `unique_
 `flat_neighbour_frac` (pixelation collapses the palette), the alpha/transparent-corner group
 (a non-axis rotation leaves transparent corners), `lap_var`, then `combing_*` (colour edits).
 
-### 8.3 Measured, not assumed: which hash does each flag gate?
+### 8.3 Measured, not assumed: what does gating a signal actually buy?
 
 We had only ever scored ORB and sHash per category. Before Phase D hardcodes any gating,
-`hash_reliability.py` scored the other three signals the same way — every signal read at a
-fixed **≤10% false-positive operating point**, so the columns are comparable:
+`hash_reliability.py` scored the other three signals the same way. Two methodology points, both
+learned the hard way:
 
-| category | aHash | pHash | hsvHash | ORB |
+**Thresholds are derived on TRAIN, never on test.** Our first pass picked each signal's
+operating point on the very split it then reported — the same error that invalidated the
+imported baseline (§4), committed by us this time. Corrected: `--split train` derives, `--split
+test` applies. Each signal sits at a fixed **≤10% FP budget on the pristine negatives** rather
+than at an F1 optimum, so all four are read at one comparable operating point (ORB's `t=16`
+sits at ~13% FP). The honest protocol barely moved the numbers (aHash `≤8`→`≤7`) and **changed
+no conclusion** — train and test agree within ~3 points on every cell, so the map is stable
+rather than fitted.
+
+**Detection alone cannot tell you whether dropping a signal helps.** So we measure two things.
+Detection is over true copies; the false-positive column re-pairs each manipulated copy against
+a deterministically-chosen *wrong* original, which is the only way to ask "when the query is a
+category-X image, does this signal fire at the wrong thing?" (The dataset's own negatives are
+all *pristine* NFTs, so they can only describe untouched queries — a limitation of our
+generator that the authors' set does not share, since theirs contains manipulated negatives.)
+
+Thresholds from train (`aHash≤7`, `pHash≤19`, `hsvHash≤3`), reported on test:
+
+| category | aHash det → FP | pHash det → FP | hsvHash det → FP | ORB det |
 |---|---|---|---|---|
-| flip_rotate_mirror | **6.7%** | **2.8%** | 77.8% | 81.7% |
-| resize_crop_reposition | 31.2% | 38.7% | 77.8% | 98.3% |
-| exact_copy (control) | 100% | 100% | 100% | 100% |
-| background_color_change | 62.6% | 82.7% | **16.1%** | 98.9% |
-| color_swap_modify_saturate | 75.6% | 78.2% | **28.3%** | 79.8% |
-| pixelated | 58.2% | **65.5%** | 79.3% | **28.5%** |
-| text_logo_emoji | 95.6% | 96.7% | 93.1% | 100% |
-| non_duplicate (FP rate) | 9.9% | 8.1% | 9.2% | 13.0% |
+| flip_rotate_mirror | **5.0%** → 0.4% | **2.8%** → 0.4% | 77.8% → 7.3% | 81.7% |
+| resize_crop_reposition | 26.1% → 1.8% | 38.7% → 1.7% | 77.8% → 7.4% | 98.3% |
+| exact_copy (control) | 100% → 9.0% | 100% → 11.3% | 100% → 11.3% | 100% |
+| background_color_change | 60.7% → 7.7% | 82.7% → 7.5% | **16.1%** → 3.8% | 98.9% |
+| color_swap_modify_saturate | 75.2% → 6.1% | 78.2% → 6.0% | **28.3%** → 6.7% | 79.8% |
+| pixelated | 55.3% → 1.9% | **65.5%** → 2.7% | 79.3% → 8.2% | **28.5%** |
+| text_logo_emoji | 93.4% → 5.0% | 96.7% → 5.7% | 93.1% → 7.8% | 100% |
+| *pristine negatives* | *8.2%* | *8.1%* | *9.2%* | *13.0%* |
 
-*The ORB column reproduces §5's table exactly, which validates the harness.*
+*The ORB column reproduces §5's table exactly, which validates the harness against work we did
+not write. Read the flip row with §5's correction: it describes rotate+resize, not mirroring.*
 
-Three findings, and the first one changed the design:
+**Finding 1 — pHash survives pixelation (65.5%) where ORB collapses (28.5%)**, and hsvHash is
+the best signal there (79.3%). Pixelation is *approximately what pHash already does*: coarsen to
+32×32 and keep low-frequency DCT. So the detail flag gates **ORB alone**. Gating pHash alongside
+it — the intuitive move — would have discarded a better-performing signal. This holds train-side
+(pHash 63.3% vs ORB 29.0%), which matters because it is the claim Phase D leans on hardest.
 
-1. **pHash survives pixelation (65.5%) where ORB collapses (28.5%)** — and hsvHash is the best
-   signal there (79.3%). Pixelation is *approximately what pHash already does*: coarsen to
-   32×32 and keep low-frequency DCT. So the detail flag must gate **ORB alone**. Gating pHash
-   alongside it — the intuitive move — would have discarded a *better-performing* signal.
-2. **hsvHash is noise under colour edits** (16.1% / 28.3%), confirming the colour grouping.
-3. **aHash/pHash are destroyed by flips/rotations** (6.7% / 2.8%): they are not
-   rotation-invariant, while hsvHash (77.8%) is. This independently reproduces the paper's own
-   Table III claim. It also exposes a **third gating axis** the router does not yet emit —
-   geometry should distrust aHash/pHash — which is a Phase D decision, not an assumption.
+**Finding 2 — hsvHash goes quiet under colour edits** (16.1% / 28.3%), confirming that grouping.
 
-The general lesson: **each signal's blind spot is a measurement, and the intuitive grouping was
-wrong in a way that would have cost accuracy.**
+**Finding 3 — aHash/pHash are destroyed by flips/rotations** (5.0% / 2.8%): they are not
+rotation-invariant, while hsvHash (77.8%) is. This independently reproduces the paper's own
+Table III claim.
+
+**Finding 4 — and this one reframes what routing buys: every broken signal is SILENT, not
+NOISY.** Look at the FP column. Where a signal's detection collapses, its false-positive rate
+collapses *with* it — aHash on flips detects 5.0% and misfires 0.4%; hsvHash on background
+changes detects 16.1% and misfires 3.8%, *below* its own 9.2% pristine baseline. A broken signal
+here does not vote at random; it abstains.
+
+That has a direct consequence the original design missed. The paper's rule flags a duplicate
+when **≥2 signals agree**. Dropping a signal that is already silent cannot change that verdict —
+it was contributing no votes to begin with. **So "drop the signals known-broken for this
+manipulation" — the phrasing of our own pivot (§3) — is measurably close to a no-op.** The
+value of routing must come from the *other* lever in that sentence: relaxing the quorum or the
+thresholds among the signals that remain reliable. On flips, for instance, only hsvHash (77.8%)
+and ORB (81.7%) work, so the ≥2 rule needs *both* to fire — roughly 0.64 joint probability, and
+that, not the presence of two dead hashes, is what caps recall.
+
+It also killed a hypothesis of ours: we expected pixelation to make aHash collide with
+everything (a coarse blob matching any other blob). It does the opposite — FP 1.9%. Pixelation
+moves a hash away from *everything*, including the wrong originals, which is exactly why it
+stays usable at 55.3%.
+
+The general lesson, twice over: **each signal's blind spot is a measurement, and the intuitive
+design was wrong both times** — once about which signal pixelation breaks, once about whether
+dropping a broken signal helps at all.
 
 ### 8.4 The §7 caveat, confirmed: the router partly learned our generator
 
@@ -549,4 +623,53 @@ different resolution convention, RGB instead of RGBA, and punk-only.
 It does not invalidate §8.2 — within a generator the reliability decisions are excellent — but
 it bounds the claim: **the router's numbers are a within-distribution result, and cross-generator
 robustness (resolution-invariant features, multi-generator training) is unfinished work.**
+
+The sharpest single instance: **flip recall is 0.0% on the reference set.** Per §5, our flip
+class is *always* rotated, so the router learned to spot flips by their transparent corners —
+and the authors' rotations are RGB, with no alpha to read. Their set also contains the pure
+mirrors ours lacks (`left_to_right` / `top_to_bottom`), which leave **no forensic trace at all**.
+Our 99.2% flip recall (§8.2) is therefore a property of our generator, not a capability. This is
+the concrete reason the geometry flag was rejected (§8.5).
+
+### 8.5 What Phase C assumed, cut, or got wrong
+
+Recorded so Phase D does not rediscover them.
+
+- **Rejected: a third "geometry" flag** (`P(flip) + P(crop)` ⇒ distrust aHash/pHash), despite it
+  looking like the biggest lever (aHash/pHash at 5.0%/2.8% on flips). Two measured reasons.
+  *It is a near-no-op*: those signals are silent there, not noisy (§8.3 finding 4), so dropping
+  them cannot change a ≥2-agree verdict. *And its trigger does not generalise*: the router's
+  99.2% flip recall reads a PIL artifact and scores 0.0% cross-generator (§8.4), so the flag
+  would fire reliably only where it is least needed — and would inflate Phase D's headline with
+  a generator artifact. **Decided: no. Do not relitigate; the gain lives in quorum/threshold
+  policy instead.**
+- **Our pixelation is severe** — `rng.uniform(0.04, 0.12)`, i.e. downscale to 4–12% of size and
+  back. §8.2's 100% detail decision is partly a property of that severity; a subtler pixelation
+  would be materially harder. The number reads "solved" but means "solved at our severity".
+- **Feature resolution policy** (load-bearing, and the reason §8.4 fails the way it does):
+  structural features run on a gray image normalised to a 256 px working edge — the same
+  normalisation ORB uses — so "is detail intact?" reads alike at 24 px or 336 px. Colour,
+  histogram, palette and alpha features run on **native** pixels, because resampling averages
+  away the quantisation combing and re-blends a collapsed palette. That split is why the model
+  survives resolution changes structurally but not chromatically.
+- **No feature ablation was run.** All 93 features were kept on the strength of RandomForest
+  importances alone; we do not know which are load-bearing, redundant, or actively harmful
+  cross-generator. Given §8.4, an ablation that drops the generator-specific tells
+  (transparent-corner, combing) and re-measures is the obvious first experiment.
+- **A threshold sweep that returns its grid extreme is a red flag, not a result.** The first
+  gating map reported every hash detecting 100% of every category *and* 100% of the negatives.
+  The tempting explanation was a base-rate artifact (the split is 82.6% positive, which really
+  does reward flagging everything) — and it was wrong. The actual cause was a dict-splat bug:
+
+  ```python
+  {"category": ..., "is_copy": r["is_copy"] == "1", **r}   # WRONG
+  ```
+
+  `is_copy` is itself a CSV column, so `**r` splatted *last* overwrote the parsed bool with the
+  raw `"0"`/`"1"` string — and **both strings are truthy**. Every row became a positive, there
+  were zero negatives, precision was therefore always 1.0, and the sweep ran to the end of its
+  grid. **Lesson: when a sweep picks the extreme end of its grid, check the label parse before
+  theorising about the metric, and assert the class balance first** — printing
+  `positives=11400 negatives=2400` would have caught it immediately. Same family as the §4
+  lesson: an instrument that cannot fail is not measuring anything.
 Reporting this is the point of having run it.
