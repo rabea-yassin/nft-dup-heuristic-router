@@ -415,3 +415,123 @@ may learn *how our dataset was made* rather than how real copymints behave.
 Mitigation: also evaluate against the authors' `data/reference/test_manipulations/` set (405 real
 manipulated images plus their metadata CSV), which we hold and have already validated against.
 This set was shared with us informally, so it stays local and is not redistributed.
+
+**Update: this caveat was not hypothetical — §8.3 measures it, and it bites.**
+
+---
+
+## 8. The router (Phase C): predicting signal reliability from one image
+
+The router predicts, from the **query image alone**, which manipulation produced it — so the
+detector can drop signals known-broken for that manipulation. "Alone" is the load-bearing
+constraint: at inference we hold only the query, never a reference to diff against, so all 93
+features are **absolute descriptors of one image**. A RandomForest (the paper's own model
+family) maps them to the 8 dataset classes.
+
+### 8.1 The router's real output is not the class label
+
+Two things make the raw 8-way accuracy the wrong headline.
+
+**First, two classes are provably indistinguishable.** A `non_duplicate` query is a pristine
+real NFT; an `exact_copy` query is byte-identical to a real NFT. From one image, with no
+reference, `exact_copy` ≡ `non_duplicate` ≡ a pure axis-aligned mirror. No feature set can
+separate them, and **none needs to**: both mean "every signal is trustworthy". We kept all 8
+labels and report the confusion rather than hiding it by merging.
+
+**Second, what Phase D actually consumes is a reliability decision**, derived from the *soft*
+class-probability vector rather than the hard argmax:
+
+```
+P(detail_broken)  = proba[pixelated]                                    -> distrust ORB
+P(colour_changed) = proba[color_swap] + proba[background_color_change]  -> distrust hsvHash
+```
+
+### 8.2 Results on the held-out test split (11,991 images)
+
+| decision | precision | recall | F1 | dangerous miss |
+|---|---|---|---|---|
+| **is detail broken?** (⇒ distrust ORB) | **100%** | **100%** | **100%** | **0.0%** |
+| **did colour change?** (⇒ distrust hsvHash) | 98.1% | 97.0% | **97.5%** | 3.0% |
+
+The dangerous error is calling a truly-pixelated image "detail intact", because that wrongly
+trusts ORB — the one signal pixelation destroys. It never happens: `pixelated` has **zero**
+leakage in the confusion matrix (1800/1800).
+
+Raw multiclass accuracy is **89.2%**, and the gap is almost entirely the confusion we
+predicted: `exact_copy` recall 20.2%, `non_duplicate` 14.2%, both dissolving into each other
+and into `text_logo_emoji`/`crop`. That costs nothing, because **92.6% of pristine images still
+receive a reliability-safe verdict** (a predicted class implying "trust every signal"). The
+multiclass errors are between classes that share a reliability profile.
+
+**The router is strongest exactly where ORB is weakest.** Detail-recall is **100% on all three
+collections including the 24×24 CryptoPunks** — the collection where ORB drops to 68.5% because
+upscaling cannot create information. Handcrafted forensics need no minimum spatial extent, so
+the router recognises a low-resolution punk and can tell the detector to lean elsewhere. That
+is the router thesis (§5) working on its hardest case.
+
+Top features, in importance order, read as a description of the design: `unique_color_ratio`,
+`flat_neighbour_frac` (pixelation collapses the palette), the alpha/transparent-corner group
+(a non-axis rotation leaves transparent corners), `lap_var`, then `combing_*` (colour edits).
+
+### 8.3 Measured, not assumed: which hash does each flag gate?
+
+We had only ever scored ORB and sHash per category. Before Phase D hardcodes any gating,
+`hash_reliability.py` scored the other three signals the same way — every signal read at a
+fixed **≤10% false-positive operating point**, so the columns are comparable:
+
+| category | aHash | pHash | hsvHash | ORB |
+|---|---|---|---|---|
+| flip_rotate_mirror | **6.7%** | **2.8%** | 77.8% | 81.7% |
+| resize_crop_reposition | 31.2% | 38.7% | 77.8% | 98.3% |
+| exact_copy (control) | 100% | 100% | 100% | 100% |
+| background_color_change | 62.6% | 82.7% | **16.1%** | 98.9% |
+| color_swap_modify_saturate | 75.6% | 78.2% | **28.3%** | 79.8% |
+| pixelated | 58.2% | **65.5%** | 79.3% | **28.5%** |
+| text_logo_emoji | 95.6% | 96.7% | 93.1% | 100% |
+| non_duplicate (FP rate) | 9.9% | 8.1% | 9.2% | 13.0% |
+
+*The ORB column reproduces §5's table exactly, which validates the harness.*
+
+Three findings, and the first one changed the design:
+
+1. **pHash survives pixelation (65.5%) where ORB collapses (28.5%)** — and hsvHash is the best
+   signal there (79.3%). Pixelation is *approximately what pHash already does*: coarsen to
+   32×32 and keep low-frequency DCT. So the detail flag must gate **ORB alone**. Gating pHash
+   alongside it — the intuitive move — would have discarded a *better-performing* signal.
+2. **hsvHash is noise under colour edits** (16.1% / 28.3%), confirming the colour grouping.
+3. **aHash/pHash are destroyed by flips/rotations** (6.7% / 2.8%): they are not
+   rotation-invariant, while hsvHash (77.8%) is. This independently reproduces the paper's own
+   Table III claim. It also exposes a **third gating axis** the router does not yet emit —
+   geometry should distrust aHash/pHash — which is a Phase D decision, not an assumption.
+
+The general lesson: **each signal's blind spot is a measurement, and the intuitive grouping was
+wrong in a way that would have cost accuracy.**
+
+### 8.4 The §7 caveat, confirmed: the router partly learned our generator
+
+Evaluated against the authors' own `test_manipulations` set (202 distinct manipulated punks, a
+different generator), the router **degrades badly**: it predicts `pixelated` for nearly
+everything, and the colour decision collapses to 0% recall at τ=0.5.
+
+The cause is diagnosed, not guessed. Their punks are **pre-upscaled to 336–454 px RGB**; ours
+are **native 24×24 RGBA**. Two of the router's top tells therefore vanish:
+
+| feature | our rotated punk | their rotated punk |
+|---|---|---|
+| `corner_minus_centre_transparent` | 0.71 | **0.00** (RGB — no alpha at all) |
+| `combing_r` | 0.69 | **0.00** (their pipeline smooths the histogram) |
+
+Stripped of its rotation and colour tells, and fed the pixelation-like flatness that smooth
+upscaling produces (`flat_neighbour_frac` 0.95), the model falls back on `pixelated`.
+
+This is the §7 caveat made concrete: **a forensic feature set trained on one generator learns
+that generator's conventions, including its resolution pipeline.** Two honest qualifications:
+the failure is *fail-safe* for the detail decision (over-firing "distrust ORB" costs recall,
+never correctness — the dangerous miss stays 0%), but it is a *real* failure for the colour
+decision. And the test is deliberately the extreme of domain shift: a different generator, a
+different resolution convention, RGB instead of RGBA, and punk-only.
+
+It does not invalidate §8.2 — within a generator the reliability decisions are excellent — but
+it bounds the claim: **the router's numbers are a within-distribution result, and cross-generator
+robustness (resolution-invariant features, multi-generator training) is unfinished work.**
+Reporting this is the point of having run it.
