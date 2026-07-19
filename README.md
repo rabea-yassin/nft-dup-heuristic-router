@@ -219,6 +219,13 @@ Three sources feed `data/` (all gitignored except `data/example/`):
 demo (public Kaggle images only) running the full pipeline end-to-end on 2 images, so the layout
 and output schema are visible on GitHub without shipping the full corpus.
 
+> **Local storage note.** The bulk image directories (`data/{raw,extra,train/images,test/images}`)
+> are large and regenerable, so on the development machine they are relocated off the root disk to
+> a separate drive and symlinked back in place — currently `/media/ra/Data/nft-dup-data/`. Every
+> path resolves transparently through the symlinks, and nothing tracked in git depends on them.
+> **If you run this repo on a machine without that drive, those symlinks dangle** — just re-run
+> `training/generate_dataset.py` to rebuild the images locally.
+
 ### Labeled data (`training/generate_dataset.py`)
 
 `data/raw/`'s images carry no manipulation labels, so we generate them: for every base image, apply
