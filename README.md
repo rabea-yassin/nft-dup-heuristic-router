@@ -14,9 +14,11 @@ Both changes target **accuracy**, not speed.
 
 > **Status.** The four paper hashes are reimplemented in C11 and **bit-exact** against the
 > reference library (see [C11 hash suite](#the-c11-hash-suite-a-completed-result)). The ORB
-> replacement is built and evaluated. The router is built and under evaluation. The final
-> detector (Phase D) is not yet assembled. Full history, findings and numbers live in
-> **[PROGRESS.md](PROGRESS.md)** — this file is the *current architecture*.
+> replacement, the router, and the final routed detector (Phase D) are all built and
+> evaluated. The headline three-way (PROGRESS.md §9): the **sHash→ORB swap** is the entire
+> gain (+6.5 F1 at the paper's rule), while **dynamic routing adds ≈0** within our
+> distribution — a measured negative result, with the mechanism. Full history, findings and
+> numbers live in **[PROGRESS.md](PROGRESS.md)** — this file is the *current architecture*.
 
 ---
 
@@ -259,8 +261,8 @@ the authors' `test_manipulations/` set, a different generator.
 | Reimplement the paper's hashes in C11, bit-exact | ✅ done (preserved, not extended) |
 | **A** — Document the C11 work, the sHash finding, and the pivot | ✅ done |
 | **B** — ORB pipeline replacing sHash: pairwise signal, tuning, per-category eval, sHash comparison, descriptor-budget curve | ✅ done |
-| **C** — The router: 93 absolute features → RandomForest → manipulation + soft reliability | 🔧 built, under evaluation |
-| **D** — The routed detector: dynamic thresholds over {aHash, pHash, hsvHash, ORB}, ≥2-agree, static fallback | ⬜ next |
+| **C** — The router: 93 absolute features → RandomForest → manipulation + soft reliability | ✅ done (PROGRESS §8) |
+| **D** — The routed detector: dynamic thresholds over {aHash, pHash, hsvHash, ORB}, ≥2-agree, static fallback | ✅ done (PROGRESS §9) |
 | Deferred | sHash's index structure (awaiting the authors' reply → a documented finding) |
 
 Phase D's deliverable is a **three-way comparison** that isolates each contribution:
