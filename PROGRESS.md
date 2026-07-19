@@ -920,3 +920,169 @@ and "the operating point everything else uses" are different instructions, and t
 quietly reproduces the trivial classifier.** Neither error changed a conclusion — the swap
 still dominates, the router is still a no-op — but both would have put a wrong number in the
 headline.
+
+---
+
+## 10. Phase E: the multi-manipulation test — the router's no-op is *fundamental*, not incidental
+
+Phase D found routing pays ≈0 on single-manipulation data, with a mechanism (§9.3): the
+router's quorum-relax lever only engages when **two** signals are distrusted at once, and one
+manipulation per image never creates that state. That is not "the router is useless" — it is
+"the situation where the router helps never occurs in single-manipulation data." Phase E
+**builds** that situation — images with two manipulations composed — and tests whether a
+**storage-free** detector can then earn a deployable win. The answer is no, and *why* it is no
+turns out to be a deeper result than Phase D's.
+
+### 10.1 The deployable thesis, and the panel that keeps crop-resistance
+
+The prize is **deployability**, and it turns on a cost asymmetry (§6): ORB's cost is on-chain
+**storage** (14.5 KB/NFT — fatal), while the router's cost is validator-side **compute** and it
+stores nothing. So the deployable detector is confined to the paper's four *cheap* hashes
+`{aHash, pHash, hsvHash, sHash}` (24–32 bytes), and the thesis is:
+
+> a router-**managed** detector over those four hashes beats the paper's **static** detector on
+> multi-manipulation — **without** sacrificing crop-resistance, adding nothing on-chain.
+
+Keeping sHash (rather than dropping it) is deliberate: sHash is the crop-resistance signal, and
+a detector that drops it goes blind on every geometric composition. The bet is that the router
+can instead *manage* sHash — trust it on geometric compositions, distrust it where it breaks —
+the same way it manages ORB and hsvHash. Whether that is possible is an empirical fork (§10.2).
+
+**The generator** (`generate_dataset.py --mode compose`) applies two manipulations in sequence,
+`second(first(base))`, over the **full cross-product** of the six non-exact manipulations in
+**both orders** (15 unordered pairs × 2 = **30 composite categories**) — the full cross-product,
+not a hand-picked subset, so the result cannot be accused of cherry-picking the combination that
+happens to win, and so the *order* effect is itself measurable. It writes two splits from the
+same base-image partition as the single-manip data: `data/multi_train/` (tune the policy) and
+`data/multi_test/` (report), 600 bases each → **18,000 positives (600 per composition) + 2,400
+pristine negatives, 88.2% positive**. The router (trained on the *train* bases' single
+manipulations) has never seen the *test* bases, nor any composite on either split.
+
+### 10.2 The fork-decider: pixelation breaks sHash, silently (Chunk 1)
+
+Phase C never measured sHash's reliability (it was mid-swap-out). Before designing the managed
+detector we added sHash to the §8.3 gating map (`hash_reliability.py`, standalone sHash at its
+iso-FP point dist≤21). Read **standalone**, not as part of a panel:
+
+| category | aHash | pHash | hsvHash | **sHash** | ORB |
+|---|---:|---:|---:|---:|---:|
+| resize_crop_reposition | 26% | 39% | 78% | **74.3%** | 98% |
+| **pixelated** | 55% | 65% | 79% | **38.1%** | 28% |
+| flip_rotate_mirror | 5% | 3% | 78% | **11.2%** | 82% |
+| pristine-neg FP | 8.2% | 8.1% | 9.2% | **7.7%** | 13% |
+| pixelated-neg FP | 1.9% | 2.7% | 8.2% | **8.7%** | — |
+
+Pixelation roughly **halves** sHash detection (crop 74.3% → pixelated 38.1%), and on pixelation
+sHash is **silent, not noisy** (FP 8.7% ≈ its pristine 7.7%). So the **detail flag** — which
+predicts pixelation at 100% (§8.2) — *can* gate sHash exactly as it gates ORB, at no precision
+cost, while sHash stays healthy on geometric compositions and keeps its crop-resistance. The
+fork resolves in favour of the full-panel "keep-and-gate" design. (A prior note mis-cited §9.1's
+"sHash 71.1% on pixelated" as evidence sHash *survives* pixelation; that 71.1% is the whole
+4-hash **panel's** ≥2 verdict, a different quantity — corrected here.)
+
+### 10.3 The gate, and the finding it forced: the colour tell is *erased*, not masked
+
+The detail flag gates sHash; the win then needs the **colour** flag to *also* fire on a
+pixelate+colour composite, so the panel falls to `{aHash, pHash}` and the quorum relaxes to ≥1.
+Running the shipped **single-label** router on the composites (`probe_multi.py`, no retrain,
+reading soft mass per §8.1), the colour flag fires **0% whenever pixelation is present** —
+because pixelation's signature **monopolises** the 8-class soft mass (P(pixelated) ≈ 0.95,
+leaving ≈0 for the colour classes). That is ambiguous between two very different causes: a
+**tooling** limit (winner-take-all normalisation) or a **physical** one (the colour tell is
+gone). The single-label router cannot tell them apart.
+
+So we removed the competition: two **independent binary heads** (`train_multilabel.py`), "detail
+= pixelated?" and "colour = colour-changed?", trained on the same single-manip features (each
+fires on its own signature, no softmax coupling). On single-manip test they are clean (detail
+100% on pixelated / 0% else; colour ~99% on colour categories / low else). On the composites:
+
+| composite | detail head | **colour head** |
+|---|---:|---:|
+| colour × non-pixelation (e.g. flip×colour, text×colour) | 0% | **76–100%** |
+| **pixelated × colour** (both orders) | 100% | **0%** |
+
+The independent colour head **still** fires 0% on pixelate×colour — in **both** orders — while
+firing 76–100% on colour composed with anything else. So it is **not** a tooling limit: the
+colour forensic tell (histogram *combing*, §7.1) is **physically erased** by pixelation.
+Pixelation collapses the palette, so a *later* recolour cannot imprint the combing pattern the
+head reads, and an *earlier* recolour's combing is smoothed away — either way the signal is
+absent. (This *refutes* our own pre-registered hypothesis that order would matter for the colour
+tell — "colour-last keeps combing." It does not. Order matters for the **detail** flag instead:
+pixelate-then-geometric degrades pixelation detection to 11–18% versus ~100% for
+geometric-then-pixelate, because cropping/rotating a pixelated image disturbs the flatness
+statistics the flag reads.)
+
+### 10.4 The measurement: routing is a no-op, the swap still pays
+
+`evaluate_multi.py` runs the four-way on multi_test, all at the §9 iso-FP operating points
+(aHash≤7, pHash≤19, hsvHash≤3, sHash≤21, ORB>23), the router-managed policy tuned on
+multi_train:
+
+| detector | P | R | **F1** | ΔF1 vs A | isolates |
+|---|---:|---:|---:|---:|---|
+| **A** static + sHash (paper) | 96.7% | 36.4% | **52.9%** | — | the number to beat |
+| **B** router-managed, same panel | 96.7% | 36.4% | **52.9%** | **+0.01** | the router = **≈0** |
+| B pure (no fallback) | 96.5% | 34.0% | 50.3% | −2.59 | routing *alone* regresses |
+| **B′** static + ORB (swap, no router) | 97.3% | 45.1% | **61.6%** | **+8.73** | the swap |
+| Cstat static sHash+ORB (no router) | 97.2% | 52.0% | 67.7% | +14.79 | +sHash in panel |
+| **C** router + ORB (ceiling) | 97.2% | 52.0% | **67.7%** | +14.80 | router w/ ORB = **≈0** |
+
+The **deployable router B does not beat the paper A (+0.01 F1)**, and **C routed = C static to
++0.01 F1** (the fallback union adds a negligible handful of relaxes and removes none) — routing is
+a no-op even with ORB in the panel. Without the static fallback,
+routing *regresses* (−2.6): distrusting sHash on detected pixelation drops a sometimes-useful
+vote, and the quorum-relax the drop is supposed to enable never fires (§10.3), so the fallback is
+load-bearing purely to keep the router from *hurting*. The **sHash→ORB swap still pays**
+(B′ vs A, **+8.7 F1**), located exactly where §5 said — the structure-surviving compositions.
+
+Three corroborations:
+- **The harness reproduces §9.1.** The same script on single-manip (`--single`) gives A **81.7**,
+  swap B′ **87.5** (**+5.77** ≈ §9.1's +5.8), routing **+0.00** — the Phase D three-way, from
+  independent code.
+- **Multi-manipulation is much harder.** The paper's recall roughly **halves**, 70.3% → 36.4%
+  (single → multi); the swap and ceiling halve similarly (79→45%, 84→52%). Composing two
+  manipulations stacks two degradations, and even the ceiling recovers only to 52%.
+- **The base-rate caveat (§9.1/§9.2) applies unchanged.** At 88.2% positive the flag-everything
+  floor is **93.8%**, so every real detector sits below it on raw F1; the honest lens is recall
+  at equal precision (all policies ~96–97% P). The weighted-vote extension (D) "wins" +23 F1 but
+  its decision threshold lands on the **grid boundary** — the §9.6/§8.5 permissiveness artifact,
+  flagged and dismissed, not a routing gain.
+
+### 10.5 The finding: the two flaggable manipulations are mutually exclusive in detectability
+
+The router's quorum-relax needs the **two-distrust state** — distrust hsvHash *and* sHash at
+once. The only detail-breaker in the manipulation set is pixelation, and pixelation is *precisely*
+the manipulation that erases the colour tell (§10.3). So the two conditions the relax requires
+**cannot co-occur**: wherever the router could justifiably distrust sHash (pixelation present),
+it can no longer perceive the colour change, and wherever it can perceive the colour change, there
+is no pixelation to justify distrusting sHash. **The two-distrust state is unreachable in
+principle**, and the quorum never relaxes.
+
+This **generalises §9.3**. Phase D explained the no-op as a *dataset* artifact — one manipulation
+per image, so two signals are never broken together — and named "compose the manipulations" as
+the experiment that would change the verdict. Phase E ran exactly that experiment, and the verdict
+**did not change**: the two-distrust state is not merely absent from our data, it is **forensically
+self-cancelling**. That is the strongest statement of the router's boundary the project has: the
+lever dynamic routing exists to pull is one the physics of these manipulations does not let it
+reach. **The measured contribution remains the sHash→ORB swap** (+8.7 F1 on multi, +5.8 on
+single); dynamic routing pays ≈0 on both, now for a reason that is fundamental rather than
+incidental.
+
+### 10.6 Honest limits
+
+- **Within our generator, and at our pixelation severity.** The erasure claim rests on PIL
+  pixelation at `rng.uniform(0.04, 0.12)` (§8.5) — severe. A subtler pixelation might leave some
+  colour tell, which would make the two-distrust state occasionally reachable; we did not test
+  milder pixelation. The colour tell's generator-specificity (§7.1/§8.4) also bounds this to a
+  within-distribution result.
+- **The multi-label heads are trained on single manipulations** (the deployable story: train on
+  single manips, deploy on anything). They generalise to composites for the *detail* axis and,
+  where the tell survives, the *colour* axis — the failure on pixelate×colour is the tell being
+  absent, not the head being weak (it fires 76–100% on other colour composites).
+- **Policy tuning on multi_train has mild base-image overlap** with the router's training bases
+  (the first 600 train bases); it affects only the *tuning* of τ and the weighted decision, both
+  of which proved immaterial (τ moves B by 0.00; the weighted decision hit its grid boundary).
+  The reported numbers are on multi_test's unseen bases.
+- **The deeper "mutually exclusive" claim is specific to *these* flags** (detail via pixelation,
+  colour via combing). A different reliability signal — one whose trigger survived pixelation —
+  could in principle reach the two-distrust state; none of the ones this project can predict do.

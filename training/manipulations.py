@@ -176,3 +176,24 @@ MANIPULATIONS = {
     "pixelated": pixelate,
     "color_swap_modify_saturate": color_swap_modify_saturate,
 }
+
+# The six non-trivial manipulations (exact_copy composes with nothing -- it is the
+# identity, so exact_copy o X == X). Phase E composes TWO of these in sequence.
+COMPOSABLE = tuple(k for k in MANIPULATIONS if k != "exact_copy")
+
+
+def composition_pairs() -> list[tuple[str, str]]:
+    """All ordered pairs (first, second) of two DISTINCT non-exact manipulations:
+    the full cross-product in BOTH orders (15 unordered x 2 = 30). Composing is
+    second(first(base)). Both orders are kept on purpose -- order changes what a
+    forensic tell survives (recolour's histogram "combing" is wiped by a later
+    pixelation but not by an earlier one), so the order effect is itself a Phase E
+    measurement, and the full cross-product avoids cherry-picking the combo that
+    happens to win."""
+    import itertools
+
+    pairs: list[tuple[str, str]] = []
+    for a, b in itertools.combinations(COMPOSABLE, 2):
+        pairs.append((a, b))
+        pairs.append((b, a))
+    return pairs

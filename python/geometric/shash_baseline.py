@@ -103,7 +103,8 @@ def paper_distance(source_segments: list, target_segments: list) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--split", default="test", choices=["train", "test"])
+    parser.add_argument("--split", default="test",
+                        choices=["train", "test", "multi_train", "multi_test"])
     parser.add_argument("--data-dir", type=Path, default=REPO_ROOT / "data")
     parser.add_argument("--limit", type=int, default=None, help="score only the first N rows")
     parser.add_argument("--workers", type=int, default=1,

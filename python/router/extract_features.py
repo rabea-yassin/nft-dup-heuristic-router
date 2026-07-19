@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 import time
+from multiprocessing import Pool
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,11 +52,26 @@ def unique_labeled_copies(metadata_path: Path) -> list[tuple[str, str]]:
     return list(seen.items())
 
 
+def _features_one(args: tuple[str, str, str]) -> tuple[str, str, str, dict[str, float]]:
+    """Worker: (images_dir, image, label) -> (image, label, collection, feats). Top-level
+    so multiprocessing can pickle it; features_from_path is a pure function of the file.
+    Pin OpenCV to one thread per worker so N processes don't oversubscribe the cores."""
+    import cv2
+
+    cv2.setNumThreads(1)
+    images_dir, image, label = args
+    feats = features_from_path(Path(images_dir) / image)
+    return image, label, collection_of(image), feats
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--split", default="train", choices=["train", "test"])
+    parser.add_argument("--split", default="train",
+                        choices=["train", "test", "multi_train", "multi_test"])
     parser.add_argument("--data-dir", type=Path, default=REPO_ROOT / "data")
     parser.add_argument("--limit", type=int, default=None, help="only the first N images")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="parallel feature-extraction workers (default 1 = serial; 0 = all cores)")
     args = parser.parse_args()
 
     split_dir = args.data_dir / args.split
@@ -62,31 +79,45 @@ def main() -> None:
     items = unique_labeled_copies(split_dir / "metadata.csv")
     if args.limit:
         items = items[: args.limit]
+    workers = args.workers if args.workers > 0 else (os.cpu_count() or 1)
 
     out_path = split_dir / "router_features.csv"
     started = time.time()
-    header: list[str] | None = None
-    with open(out_path, "w", newline="") as f:
-        writer: csv.DictWriter | None = None
-        for i, (image, label) in enumerate(items, start=1):
-            feats = features_from_path(images_dir / image)
-            if header is None:
-                header = ["image", "manipulation_type", "collection", *feats.keys()]
-                writer = csv.DictWriter(f, fieldnames=header)
-                writer.writeheader()
-            writer.writerow(
-                {"image": image, "manipulation_type": label, "collection": collection_of(image), **feats}
-            )
-            if i % 2000 == 0 or i == len(items):
-                elapsed = time.time() - started
-                rate = elapsed / i
-                print(
-                    f"  [{args.split}] {i}/{len(items)}  "
-                    f"{rate*1000:.1f} ms/img  eta {rate*(len(items)-i)/60:.1f} min",
-                    flush=True,
-                )
+    tasks = [(str(images_dir), image, label) for image, label in items]
 
-    print(f"{len(items)} images -> {out_path}  ({(time.time()-started)/60:.1f} min)")
+    # Rows are keyed by image downstream (router_signal maps image -> proba), so the
+    # write order does not matter and a process pool can stream results as they finish.
+    # The header comes from the first result's feature keys (deterministic across images).
+    def emit(writer_state, result):
+        image, label, collection, feats = result
+        if writer_state["writer"] is None:
+            header = ["image", "manipulation_type", "collection", *feats.keys()]
+            writer_state["writer"] = csv.DictWriter(writer_state["f"], fieldnames=header)
+            writer_state["writer"].writeheader()
+        writer_state["writer"].writerow(
+            {"image": image, "manipulation_type": label, "collection": collection, **feats}
+        )
+
+    with open(out_path, "w", newline="") as f:
+        state = {"f": f, "writer": None}
+        if workers <= 1:
+            for i, task in enumerate(tasks, start=1):
+                emit(state, _features_one(task))
+                if i % 2000 == 0 or i == len(tasks):
+                    rate = (time.time() - started) / i
+                    print(f"  [{args.split}] {i}/{len(tasks)}  {rate*1000:.1f} ms/img  "
+                          f"eta {rate*(len(tasks)-i)/60:.1f} min", flush=True)
+        else:
+            with Pool(workers) as pool:
+                for i, result in enumerate(pool.imap_unordered(_features_one, tasks, chunksize=16),
+                                           start=1):
+                    emit(state, result)
+                    if i % 2000 == 0 or i == len(tasks):
+                        rate = (time.time() - started) / i
+                        print(f"  [{args.split}] {i}/{len(tasks)}  {rate*1000:.1f} ms/img  "
+                              f"eta {rate*(len(tasks)-i)/60:.1f} min", flush=True)
+
+    print(f"{len(items)} images -> {out_path}  ({(time.time()-started)/60:.1f} min, workers={workers})")
 
 
 if __name__ == "__main__":

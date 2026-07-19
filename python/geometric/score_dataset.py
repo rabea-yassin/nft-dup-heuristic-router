@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 import time
+from multiprocessing import Pool
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,11 +33,31 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIELDS = ["original_image", "copy_image", "manipulation_type", "is_copy", "orb_inliers"]
 
 
+def _score_chunk(args: tuple[str, list[tuple[str, str, str, str]]]) -> list[tuple]:
+    """Worker: (images_dir, rows) -> scored rows. Each process builds its OWN OrbMatcher
+    (cv2 objects are not picklable), and pins OpenCV to one thread so N processes don't
+    oversubscribe the cores. Chunks are contiguous in metadata order, and the generator
+    writes all of a base image's rows together, so the matcher's per-original descriptor
+    cache still hits within a chunk."""
+    import cv2
+
+    cv2.setNumThreads(1)
+    images_dir, rows = args
+    matcher = OrbMatcher(images_dir)
+    out = []
+    for orig, copy, cat, is_copy in rows:
+        out.append((orig, copy, cat, is_copy, matcher.score(orig, copy)))
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--split", default="train", choices=["train", "test"])
+    parser.add_argument("--split", default="train",
+                        choices=["train", "test", "multi_train", "multi_test"])
     parser.add_argument("--data-dir", type=Path, default=REPO_ROOT / "data")
     parser.add_argument("--limit", type=int, default=None, help="score only the first N rows")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="parallel ORB workers (default 1 = serial; 0 = all cores)")
     args = parser.parse_args()
 
     split_dir = args.data_dir / args.split
@@ -43,36 +65,37 @@ def main() -> None:
         rows = list(csv.DictReader(f))
     if args.limit:
         rows = rows[: args.limit]
+    workers = args.workers if args.workers > 0 else (os.cpu_count() or 1)
 
-    matcher = OrbMatcher(split_dir / "images")
+    triples = [(r["original_image"].strip(), r["copy_image"].strip(),
+                r["manipulation_type"].strip(), r["is_copy"].strip()) for r in rows]
     out_path = split_dir / "orb_scores.csv"
-
     started = time.time()
-    with open(out_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        for i, row in enumerate(rows, start=1):
-            score = matcher.score(row["original_image"].strip(), row["copy_image"].strip())
-            writer.writerow(
-                {
-                    "original_image": row["original_image"].strip(),
-                    "copy_image": row["copy_image"].strip(),
-                    "manipulation_type": row["manipulation_type"].strip(),
-                    "is_copy": row["is_copy"].strip(),
-                    "orb_inliers": score,
-                }
-            )
-            if i % 2000 == 0 or i == len(rows):
-                elapsed = time.time() - started
-                rate = elapsed / i
-                remaining = rate * (len(rows) - i)
-                print(
-                    f"  [{args.split}] {i}/{len(rows)}  "
-                    f"{rate*1000:.0f} ms/pair  eta {remaining/60:.1f} min",
-                    flush=True,
-                )
 
-    print(f"{len(rows)} pairs scored in {(time.time()-started)/60:.1f} min -> {out_path}")
+    if workers <= 1:
+        results = _score_chunk((str(split_dir / "images"), triples))
+    else:
+        # split into `workers` contiguous chunks so each original's block stays intact
+        n = len(triples)
+        size = (n + workers - 1) // workers
+        chunks = [(str(split_dir / "images"), triples[i:i + size]) for i in range(0, n, size)]
+        results = []
+        done = 0
+        with Pool(workers) as pool:
+            for chunk_out in pool.imap(_score_chunk, chunks):
+                results.extend(chunk_out)
+                done += len(chunk_out)
+                rate = (time.time() - started) / done
+                print(f"  [{args.split}] {done}/{n}  {rate*1000:.0f} ms/pair  "
+                      f"eta {rate*(n-done)/60:.1f} min", flush=True)
+
+    with open(out_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(FIELDS)
+        writer.writerows(results)
+
+    print(f"{len(rows)} pairs scored in {(time.time()-started)/60:.1f} min "
+          f"(workers={workers}) -> {out_path}")
 
 
 if __name__ == "__main__":

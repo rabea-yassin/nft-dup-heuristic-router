@@ -50,9 +50,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import random
 import sys
 import time
+from multiprocessing import Pool
 from pathlib import Path
 
 import imagehash
@@ -84,6 +86,81 @@ def to_int(h) -> int:
 
 def hamming(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
+
+
+# --------------------------------------------------------------------------- #
+# sHash: crop_resistant_hash segment lists + the paper's mean-of-mins distance #
+# --------------------------------------------------------------------------- #
+# sHash is dHash-of-segments, so unlike the three fixed-width hashes it is a
+# variable-length LIST per image and its distance is the directional mean-of-mins
+# (PROGRESS 2). Phase C never measured it; Phase E's fork needs its per-category
+# detection AND its silent/noisy FP, at the SAME <=10% FP operating point the other
+# signals use (dist<=21, train-derived in detector_config.json). We cache the
+# segment hashes per image (the only slow part, ~137 ms/img -- parallelised), then
+# the pairwise distance is cheap arithmetic done for arbitrary pairs, exactly like
+# `distances()` does Hamming for the binary hashes.
+
+def _segments_one(args: tuple[str, str]) -> tuple[str, list[str]]:
+    """Worker: (images_dir, filename) -> (filename, [segment hex, ...]). Top-level
+    so multiprocessing can pickle it; a pure function of the image file."""
+    images_dir, filename = args
+    with Image.open(Path(images_dir) / filename) as img:
+        segs = imagehash.crop_resistant_hash(img).segment_hashes
+    return filename, [str(s) for s in segs]
+
+
+def shash_segments(split_dir: Path, images: list[str], workers: int) -> dict[str, list[int]]:
+    """image -> its dHash segment hashes as ints. Cached to shash_segments.csv so
+    the expensive crop_resistant_hash pass is paid once; parallel when workers>1
+    (order-independent output, so it never changes a result)."""
+    cache_path = split_dir / "shash_segments.csv"
+    cache: dict[str, list[int]] = {}
+    if cache_path.exists():
+        with open(cache_path, newline="") as f:
+            for r in csv.DictReader(f):
+                cache[r["image"]] = [int(h, 16) for h in r["segments"].split("|")] if r["segments"] else []
+    missing = [i for i in images if i not in cache]
+    if missing:
+        images_dir = split_dir / "images"
+        tasks = [(str(images_dir), n) for n in missing]
+        started = time.time()
+
+        def log(done: int) -> None:
+            rate = (time.time() - started) / done
+            print(f"  sHash-segmenting {done}/{len(missing)}  {rate*1000:.0f} ms/img  "
+                  f"eta {rate*(len(missing)-done)/60:.1f} min", flush=True)
+
+        if workers <= 1:
+            for done, t in enumerate(tasks, start=1):
+                name, hexes = _segments_one(t)
+                cache[name] = [int(h, 16) for h in hexes]
+                if done % 1000 == 0 or done == len(missing):
+                    log(done)
+        else:
+            with Pool(workers) as pool:
+                for done, (name, hexes) in enumerate(
+                    pool.imap_unordered(_segments_one, tasks, chunksize=16), start=1
+                ):
+                    cache[name] = [int(h, 16) for h in hexes]
+                    if done % 1000 == 0 or done == len(missing):
+                        log(done)
+        with open(cache_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["image", "segments"])
+            for name, segs in cache.items():
+                w.writerow([name, "|".join(f"{v:x}" for v in segs)])
+        print(f"  cached {len(cache)} segment lists -> {cache_path}")
+    return cache
+
+
+def shash_distance(src_segments: list[int], tgt_segments: list[int]) -> float:
+    """Mean over the SOURCE's segments of the closest Hamming distance in the target
+    -- the paper's directional distance (shash_baseline.paper_distance), computed on
+    ints via popcount so it needs no ImageHash reconstruction. Same value: dHash
+    distance IS popcount of XOR. Direction original->copy (PROGRESS 2)."""
+    if not src_segments or not tgt_segments:
+        return float("inf")
+    return sum(min(bin(s ^ t).count("1") for t in tgt_segments) for s in src_segments) / len(src_segments)
 
 
 def image_hashes(split_dir: Path, images: list[str]) -> dict[str, tuple[int, int, int]]:
@@ -176,6 +253,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--split", default="test", choices=["train", "test"])
     parser.add_argument("--data-dir", type=Path, default=REPO_ROOT / "data")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="parallel workers for the sHash segment pass (default 1; 0 = all cores)")
+    parser.add_argument("--no-shash", action="store_true",
+                        help="skip the sHash column (avoids the crop_resistant_hash pass)")
     args = parser.parse_args()
 
     split_dir = args.data_dir / args.split
@@ -206,6 +287,21 @@ def main() -> None:
             for r in csv.DictReader(f):
                 orb[(r["original_image"].strip(), r["copy_image"].strip())] = int(r["orb_inliers"])
 
+    # sHash column (Phase E fork). Its operating point is the SAME <=10% FP budget
+    # the three hashes use, already train-derived in detector_config.json (dist<=21);
+    # we load it (never fit on test) and build the per-image segment cache.
+    shash_cache: dict[str, list[int]] = {}
+    shash_t: int | None = None
+    if not args.no_shash:
+        cfg_path = args.data_dir / "train" / "detector_config.json"
+        if cfg_path.exists():
+            shash_t = int(json.loads(cfg_path.read_text())["shash_threshold"])
+            workers = args.workers if args.workers > 0 else (os.cpu_count() or 1)
+            print(f"  sHash<={shash_t} (train-derived, detector_config.json; iso-FP with the hashes)")
+            shash_cache = shash_segments(split_dir, referenced, workers)
+        else:
+            print("  (sHash column skipped: detector_config.json absent -- run tune_static.py first)")
+
     positives = [r for r in rows if r["is_copy"]]
     pristine_neg = [r for r in rows if not r["is_copy"]]
     manip_neg = manipulated_negatives(rows)
@@ -220,6 +316,15 @@ def main() -> None:
         vals = [v for v in vals if v is not None]
         return sum(v > ORB_THRESHOLD for v in vals) / len(vals) if vals else float("nan")
 
+    def shash_rate(pairs):
+        if shash_t is None:
+            return float("nan")
+        hits = sum(shash_distance(shash_cache.get(a, []), shash_cache.get(b, [])) <= shash_t
+                   for a, b in pairs)
+        return hits / len(pairs) if pairs else float("nan")
+
+    show_shash = shash_t is not None
+
     groups = [
         ("-- ORB's job (geometric) --", sorted(GEOMETRIC_POSITIVES)),
         ("-- control --", sorted(CONTROL_POSITIVES)),
@@ -228,7 +333,7 @@ def main() -> None:
 
     print(f"\n[1] DETECTION -- of true category-X copies, how often does the signal fire?")
     print(f"  {'category':<28}{'n':>6}" + "".join(f"{LABEL[s]:>9}" for s in SIGNALS) +
-          (f"{'ORB':>9}" if orb else ""))
+          (f"{'sHash':>9}" if show_shash else "") + (f"{'ORB':>9}" if orb else ""))
     for title, cats in groups:
         print(f"  {title}")
         for cat in cats:
@@ -236,31 +341,46 @@ def main() -> None:
             if not pairs:
                 continue
             line = f"  {cat:<28}{len(pairs):>6}" + "".join(f"{rate(pairs, s):>8.1%}" for s in SIGNALS)
+            if show_shash:
+                line += f"{shash_rate(pairs):>8.1%}"
             if orb:
                 line += f"{orb_rate(pairs):>8.1%}"
             print(line)
     pairs = [(r["original"], r["copy"]) for r in pristine_neg]
     print(f"  -- pristine negatives (the classic FP rate) --")
     line = f"  {'non_duplicate':<28}{len(pairs):>6}" + "".join(f"{rate(pairs, s):>8.1%}" for s in SIGNALS)
+    if show_shash:
+        line += f"{shash_rate(pairs):>8.1%}"
     if orb:
         line += f"{orb_rate(pairs):>8.1%}"
     print(line)
 
     print(f"\n[2] FALSE POSITIVES on MANIPULATED negatives -- query is a category-X image,")
     print(f"    candidate is the WRONG original. Does the signal fire anyway?")
-    print(f"  {'category':<28}{'n':>6}" + "".join(f"{LABEL[s]:>9}" for s in SIGNALS))
+    print(f"  {'category':<28}{'n':>6}" + "".join(f"{LABEL[s]:>9}" for s in SIGNALS) +
+          (f"{'sHash':>9}" if show_shash else ""))
     for title, cats in groups:
         print(f"  {title}")
         for cat in cats:
             pairs = [(a, b) for a, b, c in manip_neg if c == cat]
             if not pairs:
                 continue
-            print(f"  {cat:<28}{len(pairs):>6}" + "".join(f"{rate(pairs, s):>8.1%}" for s in SIGNALS))
+            line = f"  {cat:<28}{len(pairs):>6}" + "".join(f"{rate(pairs, s):>8.1%}" for s in SIGNALS)
+            if show_shash:
+                line += f"{shash_rate(pairs):>8.1%}"
+            print(line)
 
     print("\nReading [1]: low = the manipulation breaks that signal's detection.")
     print("Reading [2]: high = the signal is NOISY there (fires on the wrong original), so")
     print("  dropping it protects precision. Low = it is merely SILENT, and dropping it")
     print("  cannot change a '>=2 agree' verdict, because it was never voting.")
+    if show_shash:
+        print("\nsHash fork (Phase E): read STANDALONE sHash here (its own vote), NOT §9.1's 71.1%")
+        print("  pixelated figure -- that was the whole 4-hash PANEL's >=2 verdict, a different")
+        print("  quantity. If [1] pixelated detection collapses from sHash's crop baseline, the")
+        print("  detail flag can gate it (it predicts pixelation). Whether gating helps is a")
+        print("  quorum question (drop it -> the >=2 rule can fall to >=1 among survivors), and")
+        print("  [2] confirms it is SILENT there (FP ~= pristine), so dropping costs no precision.")
 
 
 if __name__ == "__main__":
