@@ -6,10 +6,14 @@ invalidated the imported baseline, PROGRESS 4 / 8.3):
   1. **sHash's threshold** -- the one operating point Phase D still has to derive.
      The three hashes come from hash_thresholds.json (8.3) and ORB from its
      established t=16 (5); sHash's slot was previously given an *oracle* test-swept
-     threshold (5), which is not admissible for a baseline we must beat. We derive
-     it on train by the SAME criterion ORB's slot was tuned by -- standalone F1 over
-     the full train positive set vs the pristine negatives -- so the swap comparison
-     (A vs B) differs only in the signal, not in how its threshold was chosen.
+     threshold (5), which is not admissible for a baseline we must beat. We place it
+     at the SAME operating point the other four signals sit at: the largest distance
+     whose false-positive rate on the pristine train negatives stays within the 8.3
+     <=10% budget (ORB's t=16 sits at ~13% FP there). So the swap comparison (A vs B)
+     differs only in the signal, not in how its threshold was chosen.
+     NB: tuning sHash by full-set F1 instead degenerates to flag-everything at our
+     82.6%-positive base rate -- it just reproduces the trivial classifier (dist<=62,
+     100% FP), which is not a usable vote. The FP budget avoids that.
 
   2. **The quorum k** for each panel, k in {1,2,3,4}, by full-set train F1. The
      paper fixed k=2 for its panel {aHash,pHash,hsvHash,sHash}. We then fired sHash
@@ -44,26 +48,32 @@ from detector_common import (
 )
 
 SHASH_GRID = list(range(0, 65))  # sHash distance grid; mean-of-mins is unbounded, 64 covers it
+FP_BUDGET = 0.10  # the §8.3 operating point shared by aHash/pHash/hsvHash (and ~ORB's t=16)
 
 
 def derive_shash_threshold(pairs) -> tuple[int, float, dict]:
-    """Most-F1 sHash distance over the full train positive set vs pristine negatives.
-    Returns (threshold, f1, diagnostics). Detection and FP both rise with t, so this
-    is a genuine interior optimum, not a monotone sweep -- the guardrail checks it."""
+    """Largest sHash distance whose FP on the pristine train negatives stays within
+    the §8.3 <=10% budget -- the same operating point the other four signals sit at,
+    so baseline A's four votes are comparable. Detection and FP both rise monotonically
+    with the distance cutoff, so the largest t within budget maximises detection there.
+    Returns (threshold, standalone_f1, diagnostics)."""
     have = [p for p in pairs if p.scores["shash"] is not None]
     pos = [p for p in have if p.is_copy]
     neg = [p for p in have if not p.is_copy]
     if not pos or not neg:
         raise SystemExit("sHash scores absent on train -- run shash_baseline.py --split train first")
-    best_t, best_f1, best_m = None, -1.0, None
+    chosen = 0
     for t in SHASH_GRID:
-        tp = sum(fires("shash", p.scores["shash"], t) for p in pos)
-        fp = sum(fires("shash", p.scores["shash"], t) for p in neg)
-        m = Metrics(tp, fp, len(pos) - tp, len(neg) - fp)
-        if m.f1 > best_f1:
-            best_t, best_f1, best_m = t, m.f1, m
-    return best_t, best_f1, {"precision": best_m.precision, "recall": best_m.recall,
-                             "n_pos": len(pos), "n_neg": len(neg)}
+        fp = sum(fires("shash", p.scores["shash"], t) for p in neg) / len(neg)
+        if fp <= FP_BUDGET:
+            chosen = t
+        else:
+            break
+    tp = sum(fires("shash", p.scores["shash"], chosen) for p in pos)
+    fp = sum(fires("shash", p.scores["shash"], chosen) for p in neg)
+    m = Metrics(tp, fp, len(pos) - tp, len(neg) - fp)
+    return chosen, m.f1, {"precision": m.precision, "recall": m.recall,
+                          "fp_on_pristine": fp / len(neg), "n_pos": len(pos), "n_neg": len(neg)}
 
 
 def best_k(pairs, panel, thresholds) -> tuple[int, dict[int, float]]:
@@ -84,10 +94,11 @@ def main() -> None:
 
     shash_t, shash_f1, diag = derive_shash_threshold(pairs)
     if shash_t in (SHASH_GRID[0], SHASH_GRID[-1]):
-        raise SystemExit(f"sHash threshold {shash_t} hit grid boundary -- widen the grid, "
-                         f"do not trust this (PROGRESS 8.5)")
-    print(f"\nsHash train threshold: dist<={shash_t}  "
-          f"(train F1 {shash_f1:.1%}, P {diag['precision']:.1%}, R {diag['recall']:.1%})")
+        raise SystemExit(f"sHash threshold {shash_t} hit grid boundary -- either no cutoff "
+                         f"meets the {FP_BUDGET:.0%} FP budget or all do; do not trust it (PROGRESS 8.5)")
+    print(f"\nsHash train threshold: dist<={shash_t}  (<=10% FP-budget point; "
+          f"FP {diag['fp_on_pristine']:.1%}, standalone F1 {shash_f1:.1%}, "
+          f"P {diag['precision']:.1%}, R {diag['recall']:.1%})")
 
     thresholds = load_config(args.data_dir)
     thresholds["shash"] = float(shash_t)
