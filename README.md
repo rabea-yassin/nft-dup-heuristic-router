@@ -16,8 +16,9 @@ Both changes target **accuracy**, not speed.
 > reference library (see [C11 hash suite](#the-c11-hash-suite-a-completed-result)). The ORB
 > replacement, the router, and the final routed detector (Phase D) are all built and
 > evaluated. The headline three-way (PROGRESS.md §9): the **sHash→ORB swap** is the entire
-> gain (+6.5 F1 at the paper's rule), while **dynamic routing adds ≈0** within our
-> distribution — a measured negative result, with the mechanism. Full history, findings and
+> gain (+5.8 F1 at the paper's rule, all signals compared at an equal ≤10% FP operating
+> point), while **dynamic routing adds ≈0** within our distribution — a measured negative
+> result, with the mechanism. Full history, findings and
 > numbers live in **[PROGRESS.md](PROGRESS.md)** — this file is the *current architecture*.
 
 ---

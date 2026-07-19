@@ -266,12 +266,18 @@ def per_category_detection(pairs: list[Pair], predict, negatives: list[Pair] | N
 
 
 def load_config(data_dir: Path = REPO_ROOT / "data") -> dict[str, float]:
-    """Per-signal thresholds: the 3 hashes from hash_thresholds.json (8.3), ORB
-    fixed at its established point (5), sHash from detector_config.json (D)."""
+    """Per-signal panel thresholds: the 3 hashes from hash_thresholds.json (8.3);
+    sHash and ORB from detector_config.json, both derived on train at the same <=10% FP
+    budget so the panel votes iso-FP (tune_static.py). ORB falls back to the §5 constant
+    only if the config is absent -- note that constant (t=16) is the geometric-subset
+    signal point (~14% FP), not the iso-FP panel point (t=23)."""
     thr = json.loads((data_dir / "train" / "hash_thresholds.json").read_text())
     out = {s: float(thr[s]["threshold"]) for s in HASH_SIGNALS}
     out["orb"] = float(ORB_THRESHOLD)
     cfg_path = data_dir / "train" / "detector_config.json"
     if cfg_path.exists():
-        out["shash"] = float(json.loads(cfg_path.read_text())["shash_threshold"])
+        cfg = json.loads(cfg_path.read_text())
+        out["shash"] = float(cfg["shash_threshold"])
+        if "orb_threshold" in cfg:
+            out["orb"] = float(cfg["orb_threshold"])
     return out

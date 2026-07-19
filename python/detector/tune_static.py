@@ -3,14 +3,15 @@
 Two things are tuned on TRAIN here, nothing on test (the protocol whose violation
 invalidated the imported baseline, PROGRESS 4 / 8.3):
 
-  1. **sHash's threshold** -- the one operating point Phase D still has to derive.
-     The three hashes come from hash_thresholds.json (8.3) and ORB from its
-     established t=16 (5); sHash's slot was previously given an *oracle* test-swept
-     threshold (5), which is not admissible for a baseline we must beat. We place it
-     at the SAME operating point the other four signals sit at: the largest distance
-     whose false-positive rate on the pristine train negatives stays within the 8.3
-     <=10% budget (ORB's t=16 sits at ~13% FP there). So the swap comparison (A vs B)
-     differs only in the signal, not in how its threshold was chosen.
+  1. **sHash's and ORB's panel thresholds**, both at the SAME <=10% FP budget on the
+     pristine train negatives that the three hashes use (8.3) -- so all four votes in a
+     panel sit at one operating point and the swap comparison (A vs B) differs only in
+     the signal. sHash's slot was previously an *oracle* test-swept threshold (5),
+     inadmissible for a baseline. ORB's §5 point t=16 was tuned on the geometric SUBSET
+     for signal quality and sits at ~14% FP on the full negatives -- looser than the
+     other signals, which would silently inflate the swap; so the detector re-points ORB
+     to its own iso-FP budget point here. (t=16 stays the signal-quality number in
+     python/geometric/; it is not the panel-vote number.)
      NB: tuning sHash by full-set F1 instead degenerates to flag-everything at our
      82.6%-positive base rate -- it just reproduces the trivial classifier (dist<=62,
      100% FP), which is not a usable vote. The FP budget avoids that.
@@ -48,7 +49,8 @@ from detector_common import (
 )
 
 SHASH_GRID = list(range(0, 65))  # sHash distance grid; mean-of-mins is unbounded, 64 covers it
-FP_BUDGET = 0.10  # the §8.3 operating point shared by aHash/pHash/hsvHash (and ~ORB's t=16)
+ORB_GRID = list(range(0, 60))    # ORB inlier-count grid; fires on inliers>t
+FP_BUDGET = 0.10  # the §8.3 operating point shared by aHash/pHash/hsvHash
 
 
 def derive_shash_threshold(pairs) -> tuple[int, float, dict]:
@@ -71,6 +73,34 @@ def derive_shash_threshold(pairs) -> tuple[int, float, dict]:
             break
     tp = sum(fires("shash", p.scores["shash"], chosen) for p in pos)
     fp = sum(fires("shash", p.scores["shash"], chosen) for p in neg)
+    m = Metrics(tp, fp, len(pos) - tp, len(neg) - fp)
+    return chosen, m.f1, {"precision": m.precision, "recall": m.recall,
+                          "fp_on_pristine": fp / len(neg), "n_pos": len(pos), "n_neg": len(neg)}
+
+
+def derive_orb_threshold(pairs) -> tuple[int, float, dict]:
+    """Most-permissive ORB inlier cutoff whose FP on the pristine train negatives stays
+    within the same <=10% budget. ORB fires on inliers>t (high=duplicate), so *smaller* t
+    is more permissive and FP falls monotonically as t rises -- we take the smallest t
+    within budget, the ORB analogue of the largest distance for a hash.
+
+    This is DELIBERATELY DISTINCT from §5's t=16. That point was tuned on the geometric
+    SUBSET for signal quality and sits at ~14% FP on the full pristine negatives; using it
+    in the panel would give ORB a looser operating point than the other three signals and
+    silently inflate the swap comparison (A vs B). For a fair panel every signal must vote
+    at one FP, so the detector uses this iso-FP point instead. t=16 stays the signal-quality
+    number in python/geometric/; it is not the panel-vote number."""
+    have = [p for p in pairs if p.scores["orb"] is not None]
+    pos = [p for p in have if p.is_copy]
+    neg = [p for p in have if not p.is_copy]
+    chosen = ORB_GRID[-1]
+    for t in ORB_GRID:
+        fp = sum(fires("orb", p.scores["orb"], t) for p in neg) / len(neg)
+        if fp <= FP_BUDGET:
+            chosen = t
+            break
+    tp = sum(fires("orb", p.scores["orb"], chosen) for p in pos)
+    fp = sum(fires("orb", p.scores["orb"], chosen) for p in neg)
     m = Metrics(tp, fp, len(pos) - tp, len(neg) - fp)
     return chosen, m.f1, {"precision": m.precision, "recall": m.recall,
                           "fp_on_pristine": fp / len(neg), "n_pos": len(pos), "n_neg": len(neg)}
@@ -100,8 +130,17 @@ def main() -> None:
           f"FP {diag['fp_on_pristine']:.1%}, standalone F1 {shash_f1:.1%}, "
           f"P {diag['precision']:.1%}, R {diag['recall']:.1%})")
 
+    orb_t, orb_f1, orb_diag = derive_orb_threshold(pairs)
+    if orb_t in (ORB_GRID[0], ORB_GRID[-1]):
+        raise SystemExit(f"ORB threshold {orb_t} hit grid boundary -- do not trust it (PROGRESS 8.5)")
+    print(f"ORB   train threshold: inliers>{orb_t}  (<=10% FP-budget point; "
+          f"FP {orb_diag['fp_on_pristine']:.1%}, standalone F1 {orb_f1:.1%}, "
+          f"P {orb_diag['precision']:.1%}, R {orb_diag['recall']:.1%})   "
+          f"[§5's t=16 was the geometric-subset signal point, ~14% FP -- not iso-FP]")
+
     thresholds = load_config(args.data_dir)
     thresholds["shash"] = float(shash_t)
+    thresholds["orb"] = float(orb_t)
 
     print("\nBest quorum k on train (full-set F1):")
     result = {}
@@ -119,8 +158,12 @@ def main() -> None:
     config = {
         "shash_threshold": shash_t,
         "shash_train_f1": round(shash_f1, 4),
+        "orb_threshold": orb_t,
+        "orb_train_f1": round(orb_f1, 4),
         "panels": result,
-        "note": "hashes from hash_thresholds.json (8.3); ORB t=16 (5); sHash derived here.",
+        "note": "hashes from hash_thresholds.json (8.3); sHash and ORB derived here at the "
+                "same <=10% FP budget so the panel votes iso-FP (§5's ORB t=16 is the "
+                "geometric-subset signal point, not the panel-vote point).",
     }
     out = args.data_dir / "train" / "detector_config.json"
     out.write_text(json.dumps(config, indent=2))

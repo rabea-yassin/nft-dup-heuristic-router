@@ -694,29 +694,41 @@ paper's detector, so no single "ours is better" number can hide which change ear
 
 ### 9.1 The headline: the swap pays, the router does not
 
-At the paper's rule (≥2 of 4) on the test split (11,400 pos / 2,400 neg):
+At the paper's rule (≥2 of 4) on the test split (11,400 pos / 2,400 neg). **All four signals
+in each panel vote at the same operating point** — the ≤10% FP-on-pristine-negatives budget
+(§8.3): aHash≤7, pHash≤19, hsvHash≤3, sHash≤21, ORB>23. That last one matters and is a
+correction: §5's ORB point t=16 was tuned on the geometric *subset* for signal quality and
+sits at ~14% FP on the full negatives, so using it here would hand ORB a looser vote than the
+other three and inflate the swap. Re-pointing ORB to its own iso-FP budget (t=23) makes A-vs-B
+a clean comparison; t=16 remains the signal-quality number in `python/geometric/`, not the
+panel-vote number (§9.8).
 
 | detector | precision | recall | **F1** | isolates |
 |---|---|---|---:|---|
 | **A** static + sHash (paper) | 97.6% | 70.3% | **81.7%** | — |
-| **B** static + ORB (the swap) | 97.6% | 80.4% | **88.2%** | swap = **+6.5 F1** |
-| **C** routed + ORB | 97.6% | 80.4% | **88.2%** | router = **≈ 0** |
+| **B** static + ORB (the swap) | 97.8% | 79.2% | **87.5%** | swap = **+5.8 F1** |
+| **C** routed + ORB | 97.8% | 79.2% | **87.5%** | router = **≈ 0** |
 
-The **sHash→ORB swap is the entire gain** (+6.5 F1 at k=2), and it is located exactly where
+The **sHash→ORB swap is the entire gain** (+5.8 F1 at k=2), and it is located exactly where
 §5 said it would be — in the geometric categories, via ORB's higher detection:
 
 | category (detected) | A: sHash | B: ORB |
 |---|---:|---:|
-| flip_rotate_mirror *(rotate+resize, no pure mirrors — §5)* | 14.1% | **64.1%** |
-| resize_crop_reposition | 69.9% | **83.4%** |
+| flip_rotate_mirror *(rotate+resize, no pure mirrors — §5)* | 14.1% | **58.4%** |
+| resize_crop_reposition | 69.9% | **80.9%** |
 | pixelated | 71.1% | 66.4% |
 | background_color_change | 79.5% | 84.2% |
 | color_swap / text / exact | ≈ equal | ≈ equal |
 
 The one place the swap *costs* a little is pixelation (71.1→66.4), where sHash still
 contributed a vote and ORB is dead (§5) — but ORB's geometric gain dwarfs it. **The router
-adds nothing measurable on top of the swap** (88.1 pure / 88.2 with fallback vs 88.2). That
+adds nothing measurable on top of the swap** (87.4 pure / 87.5 with fallback vs 87.5). That
 is the predicted no-op, and §9.3 gives the mechanism.
+
+*(Per-category F1 pairs each category's positives against the shared 2,400 negatives, so
+low-support categories read a lower F1 at the same FP — exact_copy shows F1 ~84% despite 100%
+detection. The **detection** column is the base-rate-free per-category lens; read it, not the
+per-category F1, when comparing categories.)*
 
 **The honest caveat, kept in front of every F1.** At our 82.6%-positive base rate the
 flag-everything classifier scores **F1 90.5%**, so *both* baselines at k=2 sit **below** the
@@ -733,9 +745,9 @@ k on train (selection) and reporting on test:
 | k | sHash panel F1 | ORB panel F1 | flag-all floor |
 |---|---:|---:|---:|
 | 1 | 92.4% | **94.3%** | 90.5% |
-| 2 (paper) | 81.7% | 88.2% | 90.5% |
-| 3 | 71.8% | 72.9% | 90.5% |
-| 4 | 46.7% | 48.7% | 90.5% |
+| 2 (paper) | 81.7% | 87.5% | 90.5% |
+| 3 | 71.8% | 72.8% | 90.5% |
+| 4 | 46.7% | 47.0% | 90.5% |
 
 Best-k is **1 for both panels** — it does *not* move when the panel changes. But that is not
 a statement about the panels; it is the base rate. At 82.6% positive, F1 rewards recall, so
@@ -744,14 +756,15 @@ prevalence* separates the two effects:
 
 | assumed prevalence | static k=1 | static k=2 | geometry-oracle (ceiling) |
 |---|---:|---:|---:|
-| 2% | 14.1% | **24.8%** | 26.9% |
-| 10% | 46.6% | **60.4%** | 64.4% |
-| 25% | 71.2% | **77.0%** | 81.4% |
-| 50% | 86.4% | **84.7%**† | 89.3% |
-| 82.6% (ours) | **94.3%** | 88.2% | 92.8% |
+| 2% | 15.4% | **26.7%** | 29.2% |
+| 10% | 49.1% | **62.0%** | 66.7% |
+| 25% | 73.0% | **77.4%** | 82.5% |
+| 50% | **87.1%**† | 84.4% | 89.6% |
+| 82.6% (ours) | **94.3%** | 87.5% | 92.8% |
 
 At every realistic (low) copymint prevalence the paper's **k=2 is correct** and k=1 collapses;
-only our inflated generator base rate inverts it. *(†k=1 overtakes k=2 around the 50% mark.)*
+only our inflated generator base rate inverts it. *(†k=1 overtakes k=2 between the 25% and 50%
+marks.)*
 **Real copymints are rare, so the low-prevalence rows are the deployment-relevant ones, and
 they vindicate the paper's k=2.** This is why we do **not** report "best-k=1" as a
 recommendation — it is an artifact of §7.2's deliberately ML-conventional split, quantified
@@ -767,11 +780,11 @@ remain, "≥2 of 4" ⇒ "≥2 of the trusted, ≥1 of 2 when only two survive".
 
 The measurement (C2 healthy-quorum, pure, per category vs static k=2):
 
-- Overall **F1 88.1% vs 88.2%** (Δ −0.09%). Per category it is +0.0% everywhere **except
+- Overall **F1 87.4% vs 87.5%** (Δ −0.09%). Per category it is +0.0% everywhere **except
   background_color_change, where it *regresses* −0.9%** — distrusting hsvHash there drops a
   vote that was sometimes correct.
 - τ (the flag threshold on the router's soft mass) was swept on train and barely moves the
-  result (F1 87.35→87.39% across τ∈[0.3,0.7]); C2 is so close to static that its operating
+  result (F1 86.68→86.71% across τ∈[0.3,0.7]); C2 is so close to static that its operating
   point is immaterial. We report τ=0.7 but nothing rests on it.
 
 The reason is structural: the quorum only *falls to 1-of-2* when the router marks **two**
@@ -796,21 +809,22 @@ panel:
 
 | | flip recall | crop recall | FP |
 |---|---:|---:|---:|
-| static k=2 / C2 | 64.1% | 83.4% | 9.5% |
-| + geometry flag (router trigger) | **98.3%** | **99.3%** | 9.5% |
-| + geometry flag (oracle trigger) | 98.6% | 99.7% | 9.5% |
+| static k=2 / C2 | 58.4% | 80.9% | 8.5% |
+| + geometry flag (router trigger) | **97.7%** | **98.1%** | 8.5% |
+| + geometry flag (oracle trigger) | 98.1% | 98.5% | 8.5% |
 
-It lifts flip recall **64→98%** at **zero** FP cost. The mechanism is exactly §9.3's:
+It lifts flip recall **58→98%** at **zero** FP cost. The mechanism is exactly §9.3's:
 distrusting aHash **and** pHash drops the healthy panel from 4 to 2 ({hsvHash, ORB}), so the
-quorum falls to **1-of-2** — and on flips both survivors are strong (hsvHash 77.8%, ORB
-81.7%; §8.3), so requiring *either* instead of *both* is the difference between ~0.64 joint
-and ~0.96 union. Dropping the silent hashes is not what pays; **the quorum fall the drop
-triggers is.** So the geometry flag is *not* a no-op within-distribution — it is the single
-biggest routing lever we found.
+quorum falls to **1-of-2** — and on flips hsvHash and ORB are the two survivors, so requiring
+*either* rather than *both* is the whole 58→98 gap (measured). Dropping the silent hashes is
+not what pays; **the quorum fall the drop triggers is.** So the geometry flag is *not* a no-op
+within-distribution — it is the single biggest routing lever we found.
 
 And it is precisely the one we cannot bank. Its trigger reaches ~98% here and **0.0%** on the
 authors' set (§9.5). **The lever routing needs most is the one whose trigger does not
 generalise** — that, not "routing does nothing", is Phase D's real finding about the router.
+(The FP staying flat at 8.5% is the payoff of §9.1's iso-FP correction: at ORB's old looser
+t=16 the geometry relax also nudged FP up, muddying exactly this "zero-cost" claim.)
 
 ### 9.5 Cross-generator: the authors' set (bounded by §8.4)
 
@@ -822,34 +836,43 @@ negatives — a realistic 11.2% base rate, and the negatives our own generator c
 | detector | precision | recall | **F1** |
 |---|---:|---:|---:|
 | **A** static + sHash | 38.6% | 69.3% | **49.6%** |
-| **B** static + ORB | 35.9% | 94.6% | **52.0%** |
-| **C** routed + ORB (C2+fallback) | 35.9% | 94.6% | **52.0%** |
+| **B** static + ORB | 43.5% | 94.1% | **59.5%** |
+| **C** routed + ORB (C2+fallback) | 43.5% | 94.1% | **59.5%** |
 
 Flag-all floor here is only 20.2%, so unlike the test set **all three clear it comfortably** —
-the low-prevalence regime where the detector is genuinely worth running. The swap again pays
-(+2.4 F1, via recall 69→95); the router again adds nothing under fallback. Its pure C2 variant
-*appears* to gain (+6.4 F1) but for the wrong reason: the router misfires and distrusts ORB on
-**86%** of these punks (§8.4: it over-predicts `pixelated` cross-generator), and at 11%
-prevalence being accidentally stricter happens to raise F1 — the right action for the wrong
-reason, which is not a capability. And the geometry flag's trigger recall is **0.0%** (n=86),
-confirming §9.4's bound directly. **The router's contribution here is limited by §8.4; this is
-a within-distribution result stated honestly, not a cross-generator claim.**
+the low-prevalence regime where the detector is genuinely worth running. The swap pays even
+harder here (**+9.9 F1**, recall 69→94 *and* precision 39→44); the router again adds nothing
+under fallback. Two details tie the whole section together:
+
+- Its pure C2 variant *appeared*, at ORB's old loose t=16, to gain +6.4 F1 for the wrong
+  reason — the router misfires and distrusts ORB on **86%** of these punks (§8.4: it
+  over-predicts `pixelated`), and at 11% prevalence being accidentally stricter raised F1.
+  At the **iso-FP** ORB (t=23) that accidental gain **collapses to +0.3** (59.7 vs 59.5),
+  because B is now already at the stricter operating point the misfire was blundering into.
+  So the iso-FP correction did not just clean the headline — it dissolved a spurious
+  cross-generator "win," confirming it was an artifact of ORB's loose vote, not routing.
+- The geometry flag's trigger recall is **0.0%** (n=86), confirming §9.4's bound directly.
+
+**The router's contribution here is limited by §8.4; this is a within-distribution result
+stated honestly, not a cross-generator claim.**
 
 ### 9.6 Weighted vote (C3) — an extension, not the headline
 
 Weighting each signal by its measured per-manipulation reliability (§8.3) and thresholding the
 weighted sum (threshold tuned on train) scores **F1 94.2%** — matching static k=1 (94.3%),
 because at this base rate it collapses toward the same permissive behaviour. It *does* pick up
-the geometric lift implicitly (flip detected 98.6%, crop 99.7%) by upweighting ORB/hsvHash on
+the geometric lift implicitly (flip detected 98.1%, crop 98.6%) by upweighting ORB/hsvHash on
 predicted-flips — i.e. it reaches §9.4's lever through the soft weights — but it inherits the
-identical §8.4 fragility, and its non-duplicate FP rises to 23.0%. It departs from the paper's
+identical §8.4 fragility, and its non-duplicate FP rises to 20.7%. It departs from the paper's
 rule and is the easiest to overfit, so per the plan it is reported as an extension and **does
-not carry the headline**.
+not carry the headline**. *(And its decision threshold tuned to the grid floor (0.1) — by
+§8.5's own rule a sweep landing on its grid extreme is the least trustworthy result here, a
+second reason C3 is not the headline.)*
 
 ### 9.7 What Phase D measured, and the honest limits
 
-- **The swap is the contribution; the router is not.** ORB-for-sHash buys +6.5 F1 at the
-  paper's rule (+2.4 cross-generator); dynamic voting buys ≈0 on top. We built an accurate
+- **The swap is the contribution; the router is not.** ORB-for-sHash buys +5.8 F1 at the
+  paper's rule (+9.9 cross-generator); dynamic voting buys ≈0 on top. We built an accurate
   router and measured that routing does not pay **within our distribution** — a real result,
   reported as one rather than tuned until it looked otherwise.
 - **The mechanism is understood, not just the number.** Routing is a no-op because (a) broken
@@ -858,7 +881,7 @@ not carry the headline**.
   image** generator almost never produces (§9.3). The lever is real; our data rarely triggers
   it.
 - **The one lever that would pay cannot be banked.** The geometry flag lifts flip recall
-  64→98% at zero FP (§9.4), but its trigger is a generator artifact scoring 0% cross-generator
+  58→98% at zero FP (§9.4), but its trigger is a generator artifact scoring 0% cross-generator
   (§9.5/§8.4). This is the sharpest statement of the router's boundary.
 - **k is a base-rate artifact.** Our best-k=1 is an artifact of a deliberately inflated
   positive rate (§7.2); at realistic copymint prevalence the paper's k=2 is correct (§9.2).
@@ -868,3 +891,32 @@ not carry the headline**.
   un-run ablation) would make the geometry trigger bankable. Both are the same unfinished work
   Phase C already named; Phase D is the measurement that says exactly why they are the
   bottleneck.
+
+### 9.8 Two operating-point errors caught before the numbers were trusted
+
+Publishing the near-misses is the house rule (§4, §8.5), and Phase D produced two — both in
+*how a signal's threshold was chosen*, both caught by sanity-checking against the flag-all
+floor rather than by the metric moving.
+
+1. **sHash silently degenerated to flag-everything.** The first cut derived sHash's baseline
+   threshold by maximising standalone F1 on the full train set. At our 82.6%-positive base
+   rate that objective *is* maximised by the trivial classifier, so it returned **dist≤62**,
+   which fires on **100% of pristine negatives** — a signal that always votes "duplicate" and
+   contributes nothing to a ≥2 rule. It was caught the §8.5 way: the pick sat at the top of its
+   grid and its precision equalled the base rate at 100% recall (the flag-everything
+   signature). Fixed by placing sHash at the §8.3 ≤10% FP-budget point (**dist≤21**, standalone
+   F1 77.8%), the same operating point as the three hashes.
+
+2. **The swap comparison was not iso-FP.** ORB was left at §5's t=16, which is a
+   *geometric-subset signal-quality* threshold sitting at ~14% FP on the full negatives —
+   looser than the ≤10% the other three signals use. That handed B's fourth vote a small
+   unearned edge and inflated the swap (measured: +6.5 F1 at t=16 vs **+5.8 at the fair t=23**;
+   the cross-generator swap actually *grew*, +2.4→+9.9, and a spurious C2-pure "win" dissolved,
+   §9.5). Fixed by deriving ORB's own ≤10% FP-budget point on train (**t=23**) for the panel
+   vote; t=16 stays the signal-quality number in `python/geometric/`.
+
+The lesson is one we keep relearning (§4, §8.3, §8.5): **at a skewed base rate, "maximise F1"
+and "the operating point everything else uses" are different instructions, and the first one
+quietly reproduces the trivial classifier.** Neither error changed a conclusion — the swap
+still dominates, the router is still a no-op — but both would have put a wrong number in the
+headline.
