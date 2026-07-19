@@ -19,6 +19,9 @@ test pairs, and crop_resistant_hash costs ~137 ms each -- far and away the
 dominant cost, so each image is hashed once. That per-image hashing is the only
 expensive part and is embarrassingly parallel, so `--workers` spreads it over a
 process pool; the per-pair distance is cheap arithmetic done single-threaded.
+`--workers` is verified equivalent to the serial path: a `--workers 6 --limit 400`
+run reproduced the serial cache byte-for-byte (crop_resistant_hash is deterministic
+and the output is written in metadata order regardless of hashing order).
 
 Output: data/<split>/shash_scores.csv with columns
     original_image, copy_image, manipulation_type, is_copy, shash_dist
