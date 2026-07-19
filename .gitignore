@@ -21,6 +21,8 @@ data/*
 *.tar.gz
 *.7z
 !data/example/**/*.png
+# README figures are tracked (small, hand-generated docs assets).
+!docs/*.png
 
 # --- Bare-metal build artifacts ---
 build/
@@ -44,10 +46,12 @@ logs/
 # --- Deploy key (repo-scoped SSH auth, never commit) ---
 .deploy_key/
 
-# --- Personal working note, local-only ---
+# --- Personal working notes, local-only ---
 # The single live working doc: status + next actions + vocabulary.
 # Findings belong in PROGRESS.md (tracked), never duplicated here.
 PLAN.md
+# The study & presentation guide (links into PROGRESS/GLOSSARY, no duplication).
+CHEATSHEET.md
 
 # --- Editor / OS cruft ---
 .vscode/

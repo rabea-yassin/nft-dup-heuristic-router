@@ -12,14 +12,17 @@ perceptual hashes vote at fixed thresholds. We change two things:
 
 Both changes target **accuracy**, not speed.
 
-> **Status.** The four paper hashes are reimplemented in C11 and **bit-exact** against the
-> reference library (see [C11 hash suite](#the-c11-hash-suite-a-completed-result)). The ORB
-> replacement, the router, and the final routed detector (Phase D) are all built and
-> evaluated. The headline three-way (PROGRESS.md §9): the **sHash→ORB swap** is the entire
-> gain (+5.8 F1 at the paper's rule, all signals compared at an equal ≤10% FP operating
-> point), while **dynamic routing adds ≈0** within our distribution — a measured negative
-> result, with the mechanism. Full history, findings and
-> numbers live in **[PROGRESS.md](PROGRESS.md)** — this file is the *current architecture*.
+> **Status — complete.** The four paper hashes are reimplemented in C11 and **bit-exact**
+> against the reference library (see [C11 hash suite](#the-c11-hash-suite-a-completed-result)).
+> The ORB replacement, the router, the routed detector (Phase D), and the multi-manipulation
+> test (Phase E) are all built and evaluated. The headline: the **sHash→ORB swap** is the
+> project's contribution (**+5.8 F1** single-manipulation, **+8.7 F1** multi-manipulation, all
+> signals compared at an equal ≤10% FP operating point), while **dynamic routing adds ≈0**.
+> Phase E turns that null from incidental into **fundamental** — the two-signals-broken state
+> the router needs is *forensically self-cancelling*: pixelation is the only thing that blinds
+> sHash, and it also erases the colour tell the router would read (PROGRESS.md §10). Full
+> history, findings and numbers live in **[PROGRESS.md](PROGRESS.md)** — this file is the
+> *current architecture*.
 
 ---
 
@@ -57,6 +60,20 @@ sHash's **best-case** 76.4%, *while sHash was handed an oracle threshold ORB nev
 equal precision, sHash manages **27.2% recall against ORB's 90.0%**. Notably, ORB turns out to be
 a **structure** specialist rather than a narrowly geometric one: it survives everything except the
 destruction of high-frequency detail (pixelation).
+
+![ORB feature matches between an original BAYC and a cropped, repositioned copy — 154 RANSAC inliers agree on a single geometric transform](docs/orb_match.png)
+
+*Why it works: ORB keys on stable keypoints, so a crop/reposition still leaves a large set of
+matches that agree on one transform (green lines). That geometric agreement is the signal — and
+it is exactly what a whole-image hash like sHash cannot see.*
+
+![ORB feature matches between an original Azuki and a rotated copy — 204 RANSAC inliers agree on a single geometric transform](docs/orb_match_rotate.png)
+
+*The same signal survives rotation: turn the copy ~30° and the matches simply rotate with it,
+still voting for one transform. Rotation is exactly the manipulation a whole-image hash is worst
+at, and where ORB is strongest.*
+
+![ORB vs sHash: F1 90.6% vs 76.4% on the geometric subset, and 90.0% vs 27.2% recall at equal precision](docs/orb_vs_shash.png)
 
 **3. A feature-matching signal cannot ride in transaction metadata** *(PROGRESS.md §6)*
 The paper's premise is that detection is "fully self-contained within the blockchain": hashes ride
@@ -264,12 +281,18 @@ the authors' `test_manipulations/` set, a different generator.
 | **B** — ORB pipeline replacing sHash: pairwise signal, tuning, per-category eval, sHash comparison, descriptor-budget curve | ✅ done |
 | **C** — The router: 93 absolute features → RandomForest → manipulation + soft reliability | ✅ done (PROGRESS §8) |
 | **D** — The routed detector: dynamic thresholds over {aHash, pHash, hsvHash, ORB}, ≥2-agree, static fallback | ✅ done (PROGRESS §9) |
+| **E** — Multi-manipulation test: compose generator, sHash gating map, independent multi-label heads, four-way eval | ✅ done (PROGRESS §10) |
 | Deferred | sHash's index structure (awaiting the authors' reply → a documented finding) |
 
 Phase D's deliverable is a **three-way comparison** that isolates each contribution:
 1. static 4-hash **with sHash** — the paper's baseline,
 2. static **with ORB** replacing sHash — isolates the *swap's* gain,
 3. **router-driven** dynamic thresholds + ORB — isolates the *router's* gain.
+
+**Phase E** re-runs this as a **four-way on multi-manipulation data** (PROGRESS §10.4), adding a
+router-managed all-cheap-hash panel, and reaches the same verdict — the swap pays (**+8.7 F1**),
+routing adds ≈0 — now for a *fundamental* reason: the two-signals-broken state the router needs is
+forensically self-cancelling (PROGRESS §10.5).
 
 ## Reference
 
