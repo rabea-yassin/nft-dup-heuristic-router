@@ -16,20 +16,25 @@ Two details that matter and are easy to get wrong:
 
 Hashes are cached per image: there are 12,000 unique images behind the 13,800
 test pairs, and crop_resistant_hash costs ~137 ms each -- far and away the
-dominant cost, so each image is hashed once.
+dominant cost, so each image is hashed once. That per-image hashing is the only
+expensive part and is embarrassingly parallel, so `--workers` spreads it over a
+process pool; the per-pair distance is cheap arithmetic done single-threaded.
 
 Output: data/<split>/shash_scores.csv with columns
     original_image, copy_image, manipulation_type, is_copy, shash_dist
 
 Usage:
     training/.venv/bin/python python/geometric/shash_baseline.py --split test
+    training/.venv/bin/python python/geometric/shash_baseline.py --split train --workers 7
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import os
 import time
+from multiprocessing import Pool
 from pathlib import Path
 
 import imagehash
@@ -39,18 +44,46 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIELDS = ["original_image", "copy_image", "manipulation_type", "is_copy", "shash_dist"]
 
 
-class ShashCache:
-    """crop_resistant_hash per image, computed once."""
+def _hash_one(args: tuple[str, str]) -> tuple[str, list]:
+    """Worker: (images_dir, filename) -> (filename, segment_hashes).
 
-    def __init__(self, images_dir: Path):
-        self.images_dir = Path(images_dir)
-        self._cache: dict[str, list] = {}
+    Top-level (not a closure/method) so multiprocessing can pickle it. Pure
+    function of the image file, so it is safe to run across processes.
+    """
+    images_dir, filename = args
+    with Image.open(Path(images_dir) / filename) as img:
+        return filename, imagehash.crop_resistant_hash(img).segment_hashes
 
-    def segments(self, filename: str) -> list:
-        if filename not in self._cache:
-            with Image.open(self.images_dir / filename) as img:
-                self._cache[filename] = imagehash.crop_resistant_hash(img).segment_hashes
-        return self._cache[filename]
+
+def hash_images(images_dir: Path, unique_images: list[str], workers: int, split: str) -> dict[str, list]:
+    """crop_resistant_hash for each unique image, once. Serial when workers<=1
+    (byte-identical to the old path), otherwise over a process pool. The output
+    CSV is independent of order, so parallel hashing does not change any result."""
+    cache: dict[str, list] = {}
+    n = len(unique_images)
+    started = time.time()
+
+    def log(done: int) -> None:
+        elapsed = time.time() - started
+        eta = (elapsed / done) * (n - done) if done else 0.0
+        print(f"  [{split}] hashed {done}/{n} images  {elapsed/done*1000:.0f} ms/img  "
+              f"eta {eta/60:.1f} min", flush=True)
+
+    if workers <= 1:
+        for done, name in enumerate(unique_images, start=1):
+            cache[name] = _hash_one((str(images_dir), name))[1]
+            if done % 500 == 0 or done == n:
+                log(done)
+    else:
+        tasks = [(str(images_dir), name) for name in unique_images]
+        with Pool(workers) as pool:
+            for done, (name, segs) in enumerate(
+                pool.imap_unordered(_hash_one, tasks, chunksize=16), start=1
+            ):
+                cache[name] = segs
+                if done % 500 == 0 or done == n:
+                    log(done)
+    return cache
 
 
 def paper_distance(source_segments: list, target_segments: list) -> float:
@@ -70,7 +103,11 @@ def main() -> None:
     parser.add_argument("--split", default="test", choices=["train", "test"])
     parser.add_argument("--data-dir", type=Path, default=REPO_ROOT / "data")
     parser.add_argument("--limit", type=int, default=None, help="score only the first N rows")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="parallel image-hashing workers (default 1 = serial; 0 = all cores)")
     args = parser.parse_args()
+
+    workers = args.workers if args.workers > 0 else (os.cpu_count() or 1)
 
     split_dir = args.data_dir / args.split
     with open(split_dir / "metadata.csv", newline="") as f:
@@ -78,17 +115,26 @@ def main() -> None:
     if args.limit:
         rows = rows[: args.limit]
 
-    cache = ShashCache(split_dir / "images")
-    out_path = split_dir / "shash_scores.csv"
+    # Unique images behind the pairs, first-seen order (order does not affect output).
+    seen: dict[str, None] = {}
+    for row in rows:
+        seen[row["original_image"].strip()] = None
+        seen[row["copy_image"].strip()] = None
+    unique_images = list(seen)
 
+    print(f"[{args.split}] {len(rows)} pairs, {len(unique_images)} unique images, "
+          f"workers={workers}", flush=True)
+    cache = hash_images(split_dir / "images", unique_images, workers, args.split)
+
+    out_path = split_dir / "shash_scores.csv"
     started = time.time()
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
-        for i, row in enumerate(rows, start=1):
+        for row in rows:
             original = row["original_image"].strip()
             copy = row["copy_image"].strip()
-            dist = paper_distance(cache.segments(original), cache.segments(copy))
+            dist = paper_distance(cache[original], cache[copy])
             writer.writerow(
                 {
                     "original_image": original,
@@ -98,15 +144,6 @@ def main() -> None:
                     "shash_dist": f"{dist:.4f}",
                 }
             )
-            if i % 500 == 0 or i == len(rows):
-                elapsed = time.time() - started
-                remaining = (elapsed / i) * (len(rows) - i)
-                print(
-                    f"  [{args.split}] {i}/{len(rows)}  "
-                    f"{elapsed/i*1000:.0f} ms/pair  {len(cache._cache)} images hashed  "
-                    f"eta {remaining/60:.1f} min",
-                    flush=True,
-                )
 
     print(f"{len(rows)} pairs scored in {(time.time()-started)/60:.1f} min -> {out_path}")
 
