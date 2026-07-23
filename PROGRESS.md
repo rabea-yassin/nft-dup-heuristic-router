@@ -736,6 +736,26 @@ trivial floor. This is not a real defeat — it is the base-rate artifact §9.2 
 it is why every table here prints the computed floor beside the F1, and why the paper's k=2
 must be read against §9.2 rather than in isolation.
 
+**The paper *as deployed*.** Row A above re-tunes the paper's hash thresholds to *our* split,
+an advantage a shipped detector never gets — it runs at **fixed** thresholds. Held to the paper's
+**own published** 2-Minimal thresholds (aHash≤7, pHash≤15, hsvHash≤3, sHash≤17;
+`NFT_Duplications.pdf`, Table V), and swapping *only* sHash→ORB (the paper's other thresholds
+untouched), on the same test set:
+
+| detector, *as deployed* | P | R | **F1** |
+|---|---:|---:|---:|
+| Paper 2-Minimal @ its **published** thresholds (frozen) | 98.1% | 64.1% | **77.5%** |
+| **Swap — replace only sHash with ORB** | 98.1% | 77.2% | **86.4%** |
+| Paper 2-Minimal @ *our* re-tuned thresholds (= A) | 97.6% | 70.3% | 81.7% |
+
+Re-tuning *helps* the paper here (+4.2 F1); the swap beats it either way — **+8.9 F1** over the
+frozen paper, +5.8 over the re-tuned one (`python/detector/evaluate_deployed.py`). *(For locating
+our numbers relative to the paper's: its own tables report the 2-Minimal detector at (88.4%,
+94.13%) duplicate/non-duplicate detection on DISC21 and (82.32%, 97.23%) on CryptoPunks —
+recall/specificity, on a benchmark and BK-tree pipeline we do not reproduce, so not directly
+comparable to our pairwise P/R/F1. Two things there still corroborate us: sHash is among their
+weakest hashes, and their own Random Forest does not beat the 2-Minimal rule — Phase D's result.)*
+
 ### 9.2 The voting rule k is a base-rate parameter, not a free one
 
 We had inherited "≥2 of 4" as a constant. It is the paper's tuned hyperparameter, tuned for
@@ -842,7 +862,22 @@ negatives — a realistic 11.2% base rate, and the negatives our own generator c
 Flag-all floor here is only 20.2%, so unlike the test set **all three clear it comfortably** —
 the low-prevalence regime where the detector is genuinely worth running. The swap pays even
 harder here (**+9.9 F1**, recall 69→94 *and* precision 39→44); the router again adds nothing
-under fallback. Two details tie the whole section together:
+under fallback.
+
+**But +9.9 is measured against a handicapped paper.** Baseline A uses *our* re-tuned thresholds,
+looser than the paper's own and precision-wrecking at this low prevalence. Held to the paper's
+**published** thresholds — the honest "as deployed" baseline (§9.1) — and swapping only sHash→ORB:
+
+| detector, *as deployed* | P | R | **F1** |
+|---|---:|---:|---:|
+| Paper 2-Minimal @ its **published** thresholds (frozen) | 55.2% | 65.8% | **60.0%** |
+| **Swap — replace only sHash with ORB** | 48.0% | 93.1% | **63.3%** |
+| Paper 2-Minimal @ *our* re-tuned thresholds (= A) | 38.6% | 69.3% | 49.6% |
+
+So the *deployed* cross-generator margin is **+3.3 F1** (60.0 → 63.3), not +9.9 — and it is
+threshold-dependent: at a looser ORB (t=16) the swap slips to 54.8 and *loses* to the frozen
+paper. The swap still wins on the authors' own data, but honestly and by a modest, ORB-sensitive
+margin. Two details tie the whole section together:
 
 - Its pure C2 variant *appeared*, at ORB's old loose t=16, to gain +6.4 F1 for the wrong
   reason — the router misfires and distrusts ORB on **86%** of these punks (§8.4: it

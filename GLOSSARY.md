@@ -68,6 +68,15 @@ report numbers on the *test* split, which those thresholds never saw. Otherwise
 you're grading your own homework. Choosing an operating point on test is the exact
 error that invalidated the imported baseline (PROGRESS §4).
 
+**As-deployed (frozen) thresholds** — evaluating a detector at the *published*
+thresholds it would actually ship with, instead of re-tuning them to the dataset in
+front of you. Re-tuning can flatter *or* handicap a detector depending on the target
+distribution, so the frozen comparison is the one that answers "how does their
+algorithm behave in the real world" (PROGRESS §9.1/§9.5). Contrast the **iso-FP** protocol
+(§9.1–§9.5), which re-derives every signal's threshold to a common ≤10% false-positive
+budget on our train split — fair in the "equal footing" sense, but it hands the paper's
+hashes a re-tuning they would not get deployed.
+
 **Per-category reporting** — always break numbers down by manipulation type, never
 one global F1. A single headline hides where a signal is broken — and any routing
 win is *concentrated* exactly where signals break, so a global number can bury it

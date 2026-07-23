@@ -12,17 +12,34 @@ perceptual hashes vote at fixed thresholds. We change two things:
 
 Both changes target **accuracy**, not speed.
 
-> **Status — complete.** The four paper hashes are reimplemented in C11 and **bit-exact**
-> against the reference library (see [C11 hash suite](#the-c11-hash-suite-a-completed-result)).
-> The ORB replacement, the router, the routed detector (Phase D), and the multi-manipulation
-> test (Phase E) are all built and evaluated. The headline: the **sHash→ORB swap** is the
-> project's contribution (**+5.8 F1** single-manipulation, **+8.7 F1** multi-manipulation, all
-> signals compared at an equal ≤10% FP operating point), while **dynamic routing adds ≈0**.
-> Phase E turns that null from incidental into **fundamental** — the two-signals-broken state
-> the router needs is *forensically self-cancelling*: pixelation is the only thing that blinds
-> sHash, and it also erases the colour tell the router would read (PROGRESS.md §10). Full
+> **Status — complete.** The headline: the **sHash→ORB swap** is the project's contribution
+> (**+5.8 F1** single-manipulation, **+8.7 F1** multi-manipulation, at an equal ≤10% FP operating
+> point), while **dynamic routing adds ≈0**. The ORB replacement, the router, the routed detector
+> (Phase D) and the multi-manipulation test (Phase E) are all built and evaluated — and Phase E
+> turns that null from incidental into **fundamental**: the two-signals-broken state the router
+> needs is *forensically self-cancelling* (pixelation is the only thing that blinds sHash, and it
+> also erases the colour tell the router would read, PROGRESS.md §10). *(An earlier phase
+> reimplemented the paper's four hashes in C11, bit-exact — groundwork we've since set down; kept
+> but no longer built on, [details below](#the-c11-hash-suite--preserved-groundwork).)* Full
 > history, findings and numbers live in **[PROGRESS.md](PROGRESS.md)** — this file is the
 > *current architecture*.
+
+### The result in one table
+
+The paper's detector **as it would actually be deployed** — its own published 2-Minimal
+thresholds, frozen — vs the swap (replace only `sHash` with ORB), on our test set:
+
+| detector, on our test set | precision | recall | **F1** |
+|---|---:|---:|---:|
+| Paper 2-Minimal @ its **published** thresholds (as deployed) | 98.1% | 64.1% | **77.5%** |
+| **Swap — replace only `sHash` with ORB** | 98.1% | 77.2% | **86.4%** |
+| Paper 2-Minimal @ *our* re-tuned thresholds | 97.6% | 70.3% | 81.7% |
+
+The swap wins whether the paper runs at its own thresholds (**+8.9 F1**) or is re-tuned to our
+data (+5.8) — and re-tuning is an advantage a shipped detector never gets. The margin holds on the
+authors' own dataset too (a modest, ORB-threshold-dependent +3.3 F1). Details, per-signal numbers,
+and the cross-generator table: [PROGRESS.md §9.1](PROGRESS.md) (reproduce with
+`python/detector/evaluate_deployed.py`).
 
 ---
 
@@ -118,35 +135,6 @@ one binary string in a BK-tree. ORB emits a *set* of binary descriptors, so it n
 BK-tree. (A KD-tree would imply SIFT's 128-D float descriptors, and KD-trees degrade toward linear
 scan at that dimensionality — hence FLANN's randomized KD-*forests*.) **The descriptor type
 dictates the index structure**, and that is the real cost of closing the geometric blind spot.
-
-## The C11 hash suite — a completed result
-
-Before the project pivoted to Python, all four paper hashes (plus dHash, a prerequisite) were
-reimplemented from scratch in C11 and validated to be **bit-exact** against Johannes Buchner's
-[`imagehash`](https://github.com/JohannesBuchner/imagehash) — the library that produced the paper's
-own published numbers.
-
-| Hash | Size | Parity | Notes |
-|------|------|--------|-------|
-| aHash | 64-bit | bit-tolerant | 8×8 grayscale, mean threshold |
-| pHash | 64-bit | bit-tolerant | 32×32 → DCT low-freq 8×8, median threshold |
-| hsvHash | 42-bit | **bit-exact** | port of `colorhash()`; global HSV histogram |
-| dHash | 64-bit | **bit-exact** | 9×8 horizontal gradient; sHash's per-segment hash |
-| sHash | list | **bit-exact** | port of `crop_resistant_hash()` |
-
-Validated on 600 distinct images (including all 402 of the authors' own reference images and
-synthetic edge cases); for sHash this matched the **full ordered segment list**, not a summary.
-`shash_paper_distance` reproduced **all 1,802 rows** of the authors' reference CSV. ASan + UBSan
-clean. Two things made this hard, both documented in [PROGRESS.md](PROGRESS.md) §1: Pillow's
-**float/double literal trap** (its locals are `float` but its literals are `double`, so the
-arithmetic silently runs at double precision), and resolving ambiguities the paper's prose left
-open by reading the library's actual C source rather than trusting its description.
-
-**This work is preserved, not extended.** A C11-vs-Python speed comparison isn't a defensible claim
-for a formal write-up, and duplicating logic in two languages before the idea is proven is wasted
-effort — so the project is **Python-only from here**. The C11 suite stands as a genuine validated
-result, and its sHash port is what produced Finding #1. Per-hash design notes live in each
-`src/hashes/<name>/README.md`.
 
 ## Toolchain
 
@@ -271,6 +259,39 @@ training/.venv/bin/python training/generate_dataset.py
 brightness edit) is partly **generator-specific**. A rich classifier could learn *how our dataset
 was made* rather than how real copymints behave. Mitigation: the router is also evaluated against
 the authors' `test_manipulations/` set, a different generator.
+
+## The C11 hash suite — preserved groundwork
+
+*An earlier phase, before the pivot to Python — kept because it's honest and it produced
+Finding #1, but it is **not** the project's contribution and nothing here is built on further.
+Skim or skip.*
+
+Before the pivot, all four paper hashes (plus dHash, a prerequisite) were reimplemented from
+scratch in C11 and validated **bit-exact** against Johannes Buchner's
+[`imagehash`](https://github.com/JohannesBuchner/imagehash) — the library that produced the
+paper's own published numbers.
+
+| Hash | Size | Parity | Notes |
+|------|------|--------|-------|
+| aHash | 64-bit | bit-tolerant | 8×8 grayscale, mean threshold |
+| pHash | 64-bit | bit-tolerant | 32×32 → DCT low-freq 8×8, median threshold |
+| hsvHash | 42-bit | **bit-exact** | port of `colorhash()`; global HSV histogram |
+| dHash | 64-bit | **bit-exact** | 9×8 horizontal gradient; sHash's per-segment hash |
+| sHash | list | **bit-exact** | port of `crop_resistant_hash()` |
+
+Validated on 600 distinct images (including all 402 of the authors' own reference images and
+synthetic edge cases); for sHash this matched the **full ordered segment list**, not a summary.
+`shash_paper_distance` reproduced **all 1,802 rows** of the authors' reference CSV. ASan + UBSan
+clean. Two things made this hard, both documented in [PROGRESS.md](PROGRESS.md) §1: Pillow's
+**float/double literal trap** (its locals are `float` but its literals are `double`, so the
+arithmetic silently runs at double precision), and resolving ambiguities the paper's prose left
+open by reading the library's actual C source rather than trusting its description.
+
+**Why it's set down.** A C11-vs-Python speed comparison isn't a defensible claim for a formal
+write-up, and duplicating logic in two languages before the idea is proven is wasted effort — so
+the project went **Python-only**. What actually carries into the final work is small: the sHash
+port produced Finding #1, and these hashes are the reference our Python signals are checked
+against. Per-hash design notes live in each `src/hashes/<name>/README.md`.
 
 ## Roadmap
 
