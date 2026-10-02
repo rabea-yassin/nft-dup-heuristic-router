@@ -1,4 +1,4 @@
-# NFT Copymint Detection — a Routed, ORB-Augmented Detector
+# NFT Copymint Detection — an Edit-Aware, ORB-Augmented Detector
 
 An extension of *"Combating NFT Copymints in Blockchain Networks: An Image Hashing Approach"*
 (Kotzer, Reviriego, Conde Diaz, Rottenstreich). The paper detects copymints by letting four
@@ -6,19 +6,20 @@ perceptual hashes vote at fixed thresholds. We change two things:
 
 1. **We replace `sHash` with ORB feature matching** — because sHash cannot be soundly indexed,
    and ORB does its job (crop/geometric robustness) substantially better. *Measured, not asserted.*
-2. **We route the signals** — a classifier predicts what was done to a query image, so the
+2. **We gate the signals** — an *edit classifier* predicts what was done to a query image, so the
    detector can stop trusting signals that are known-broken for that manipulation, instead of
-   letting every hash vote unconditionally.
+   letting every hash vote unconditionally. (This component used to be called "the router"; the
+   name collided with the networking sense once too often. The code module is still `router/`.)
 
 Both changes target **accuracy**, not speed.
 
 > **Status — complete.** The headline: the **sHash→ORB swap** is the project's contribution
 > (**+5.8 F1** single-manipulation, **+8.7 F1** multi-manipulation, at an equal ≤10% FP operating
-> point), while **dynamic routing adds ≈0**. The ORB replacement, the router, the routed detector
-> (Phase D) and the multi-manipulation test (Phase E) are all built and evaluated — and Phase E
-> turns that null from incidental into **fundamental**: the two-signals-broken state the router
-> needs is *forensically self-cancelling* (pixelation is the only thing that blinds sHash, and it
-> also erases the colour tell the router would read, PROGRESS.md §10). *(An earlier phase
+> point), while **edit-aware gating adds ≈0**. The ORB replacement, the edit classifier, the gated
+> detector (Phase D) and the multi-manipulation test (Phase E) are all built and evaluated — and
+> Phase E turns that null from incidental into **fundamental**: the two-signals-broken state the
+> classifier needs is *forensically self-cancelling* (pixelation is the only thing that blinds sHash,
+> and it also erases the colour tell the classifier would read, PROGRESS.md §10). *(An earlier phase
 > reimplemented the paper's four hashes in C11, bit-exact — groundwork we've since set down; kept
 > but no longer built on, [details below](#the-c11-hash-suite--preserved-groundwork).)* Full
 > history, findings and numbers live in **[PROGRESS.md](PROGRESS.md)** — this file is the
@@ -112,17 +113,17 @@ query image
   │                                                              P(colour changed)  → distrust hsvHash
   │
   └─ signals:  aHash │ pHash │ hsvHash │ ORB
-                  └────────► ≥2 agree ⇒ duplicate  (the paper's rule, with routed thresholds;
-                                                    static fallback when the router is unsure)
+                  └────────► ≥2 agree ⇒ duplicate  (the paper's rule, with gated thresholds;
+                                                    static fallback when the classifier is unsure)
 ```
 
-**The router is for accuracy.** It predicts the manipulation from the query, then drops or
+**The edit classifier is for accuracy.** It predicts the manipulation from the query, then drops or
 discounts signals that manipulation is known to break. When it isn't confident, it falls back to
-the paper's static thresholds — so the routed detector should never be *worse* than the paper's.
+the paper's static thresholds — so the gated detector should never be *worse* than the paper's.
 
-**Reliability is derived from soft probabilities, not a hard label.** The router outputs a
+**Reliability is derived from soft probabilities, not a hard label.** The classifier outputs a
 probability *vector* over 8 classes; reliability is read as probability mass (e.g.
-`P(detail broken) = P(pixelated)`), so a router torn between two classes discounts a signal
+`P(detail broken) = P(pixelated)`), so a classifier torn between two classes discounts a signal
 *partially* rather than flipping it on a coin-toss.
 
 **Which hash each flag gates is measured, not assumed** (`python/router/hash_reliability.py`).
@@ -147,15 +148,15 @@ directly rather than maintaining a second reimplementation.
   algorithm entirely. Since the paper's published numbers were produced by whatever the library
   actually does, we port `colorhash()`'s real algorithm, not the prose description.
 - **Pinned versions** (`training/requirements.txt`) — a future default-filter change in Pillow or
-  numpy would silently shift what "matching the paper" even means. `scikit-learn` is **router-only
-  and never in the hash path**, so it cannot touch any bit-exactness claim.
+  numpy would silently shift what "matching the paper" even means. `scikit-learn` is
+  **classifier-only and never in the hash path**, so it cannot touch any bit-exactness claim.
 
 | Concern | Choice |
 |---|---|
 | Language | Python 3.12 (`training/.venv`) |
 | Hash values | Buchner's `imagehash` (our C11 port is bit-exact to it, so values are identical either way) |
 | Geometric signal | OpenCV ORB → BFMatcher(Hamming, crossCheck) → RANSAC homography inlier count |
-| Router | scikit-learn `RandomForestClassifier` → `predict_proba` (the paper's model family) |
+| Edit classifier | scikit-learn `RandomForestClassifier` → `predict_proba` (the paper's model family) |
 | Index (discussion only) | ORB ⇒ LSH; BK-tree ⇒ the fixed-width hashes. Not on the evaluation path — we score **pairwise**. |
 
 **Why pairwise, not retrieval.** We compare `original_image` against `copy_image` directly. This
@@ -187,7 +188,7 @@ survives as a *scalability* discussion, not an accuracy claim.
 │   │   ├── descriptor_budget.py #   accuracy-vs-bytes curve (--budgets: live demo knob)
 │   │   ├── verify_baseline.py   #   proof the old baseline measured gallery membership
 │   │   └── original/            #   teammate's initial pipeline, imported as-is (reference)
-│   └── router/          # The router: predicted manipulation → signal reliability
+│   └── router/          # The edit classifier: predicted manipulation → signal reliability
 │       ├── features.py          #   93 absolute single-image descriptors
 │       ├── extract_features.py  #   cached pass → data/<split>/router_features.csv
 │       ├── train_router.py      #   RandomForest → class probabilities + confidence
@@ -199,7 +200,7 @@ survives as a *scalability* discussion, not an accuracy claim.
 ```
 
 > `src/bench/`, `src/bktree/`, `src/features/` and `src/router/` are empty `.gitkeep` placeholders
-> left from the original C11 plan (a codegen'd, zero-allocation router). That plan is abandoned;
+> left from the original C11 plan (a codegen'd, zero-allocation classifier). That plan is abandoned;
 > the directories are vestigial and can be removed.
 
 ## Dataset
@@ -214,13 +215,13 @@ Three sources feed `data/` (all gitignored except `data/example/`):
 - **[`tunguz/cryptopunks`](https://www.kaggle.com/datasets/tunguz/cryptopunks)** (Kaggle) — 10,000
   CryptoPunk sprites; the exact dataset the paper cites for its Table V evaluation. Held in
   `data/extra/`, **deliberately out of `raw/`**: at 10,000 against 1,000 each of the others, it
-  would let punk-specific patterns dominate the router's classifier rather than what actually
+  would let punk-specific patterns dominate the edit classifier rather than what actually
   discriminates a manipulation. Kept for later scale/stress testing.
 - **`data/reference/test_manipulations/`** — obtained **directly from the paper's authors**, not a
   public set: 405 manipulated CryptoPunk images plus a 1,802-row CSV of
   `(original, copy, is_copy, manipulation)` pairs with the authors' own precomputed hashes and
   distances. It doubles as a differential-test fixture and as a **cross-generator check** for the
-  router (see below). **Shared informally — it stays local, is not redistributed, and no published
+  edit classifier (see below). **Shared informally — it stays local, is not redistributed, and no published
   result may rest on it without checking with the authors first.**
 
 **`data/example/` is the one exception to "all of `data/` is gitignored"** — a tiny, git-tracked
@@ -254,10 +255,10 @@ python3 -m venv training/.venv && training/.venv/bin/pip install -r training/req
 training/.venv/bin/python training/generate_dataset.py
 ```
 
-**Validity caveat.** Our manipulations are PIL-generated, so any forensic trace the router learns
+**Validity caveat.** Our manipulations are PIL-generated, so any forensic trace the classifier learns
 (e.g. histogram "combing" — the missing-bin artifacts integer quantisation leaves after a
 brightness edit) is partly **generator-specific**. A rich classifier could learn *how our dataset
-was made* rather than how real copymints behave. Mitigation: the router is also evaluated against
+was made* rather than how real copymints behave. Mitigation: the classifier is also evaluated against
 the authors' `test_manipulations/` set, a different generator.
 
 ## The C11 hash suite — preserved groundwork
@@ -300,19 +301,19 @@ against. Per-hash design notes live in each `src/hashes/<name>/README.md`.
 | Reimplement the paper's hashes in C11, bit-exact | ✅ done (preserved, not extended) |
 | **A** — Document the C11 work, the sHash finding, and the pivot | ✅ done |
 | **B** — ORB pipeline replacing sHash: pairwise signal, tuning, per-category eval, sHash comparison, descriptor-budget curve | ✅ done |
-| **C** — The router: 93 absolute features → RandomForest → manipulation + soft reliability | ✅ done (PROGRESS §8) |
-| **D** — The routed detector: dynamic thresholds over {aHash, pHash, hsvHash, ORB}, ≥2-agree, static fallback | ✅ done (PROGRESS §9) |
+| **C** — The edit classifier: 93 absolute features → RandomForest → manipulation + soft reliability | ✅ done (PROGRESS §8) |
+| **D** — The gated detector: dynamic thresholds over {aHash, pHash, hsvHash, ORB}, ≥2-agree, static fallback | ✅ done (PROGRESS §9) |
 | **E** — Multi-manipulation test: compose generator, sHash gating map, independent multi-label heads, four-way eval | ✅ done (PROGRESS §10) |
 | Deferred | sHash's index structure (awaiting the authors' reply → a documented finding) |
 
 Phase D's deliverable is a **three-way comparison** that isolates each contribution:
 1. static 4-hash **with sHash** — the paper's baseline,
 2. static **with ORB** replacing sHash — isolates the *swap's* gain,
-3. **router-driven** dynamic thresholds + ORB — isolates the *router's* gain.
+3. **classifier-driven** dynamic thresholds + ORB — isolates the *classifier's* gain.
 
 **Phase E** re-runs this as a **four-way on multi-manipulation data** (PROGRESS §10.4), adding a
-router-managed all-cheap-hash panel, and reaches the same verdict — the swap pays (**+8.7 F1**),
-routing adds ≈0 — now for a *fundamental* reason: the two-signals-broken state the router needs is
+classifier-managed all-cheap-hash panel, and reaches the same verdict — the swap pays (**+8.7 F1**),
+gating adds ≈0 — now for a *fundamental* reason: the two-signals-broken state the classifier needs is
 forensically self-cancelling (PROGRESS §10.5).
 
 ## Reference

@@ -1,5 +1,8 @@
 # --- Reference papers / documents ---
+# Source papers and references stay local; our own final report is a
+# deliverable and is tracked.
 *.pdf
+!NFT_Copymint_Final_Report.pdf
 
 # --- Large image datasets & raw NFT assets ---
 # Everything under data/ is ignored except data/example/, a small,
@@ -52,12 +55,16 @@ logs/
 PLAN.md
 # The study & presentation guide (links into PROGRESS/GLOSSARY, no duplication).
 CHEATSHEET.md
+# The speaker script for the presentation deck.
+SCRIPT_V3.md
 
 # --- Editor / OS cruft ---
 .vscode/
 .idea/
 *.swp
 .DS_Store
+# Office lock files, left beside any document that is open right now.
+~$*
 
 # --- Python (offline training scripts, if any) ---
 __pycache__/
