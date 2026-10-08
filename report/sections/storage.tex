@@ -1,0 +1,73 @@
+\section{Finding 2: What ORB Costs in Storage}
+\label{sec:storage}
+
+The paper's design stores every image's hashes inside its mint transaction, so that detection
+is ``fully self-contained within the blockchain''. That works for the four hashes. It does not
+work for ORB, and we report this as a finding.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Representation & Bytes per image & Transactions (400\,B each) \\
+\midrule
+aHash + pHash + hsvHash          & 24 (fixed)    & 0.06 \\
+sHash                            & 32 (median)   & 0.08 \\
+\textbf{All four paper hashes}   & \textbf{$\approx$56} & \textbf{0.14} \\
+\midrule
+ORB, default (about 455 landmarks $\times$ 32\,B) & 14,560 & 36.4 \\
+\bottomrule
+\end{tabular}
+\caption{Measured storage per image, on 60 real originals.}
+\label{tab:storage}
+\end{table}
+
+At OpenCV's default setting, ORB keeps about 455 descriptors of 32 bytes each, 14,560 bytes per
+image, the size of about 36 whole transactions. The default cap of 500 descriptors was never a
+deliberate choice, and it is not even reached. So we measured the whole accuracy-versus-size
+curve, giving every descriptor budget its own best threshold so that only the shape of the
+curve is compared (Figure~\ref{fig:storage}). This protocol checks out: at the default budget
+it gives F1 90.8, within 0.2 of the train-tuned 90.6.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.72\linewidth]{\fig{fig_storage.pdf}}
+\caption{ORB accuracy on the geometric subset against bytes stored per image. The shaded band
+is one mint transaction. No point on the ORB curve lies inside it.}
+\label{fig:storage}
+\end{figure}
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}rrrrrr@{}}
+\toprule
+Landmarks & Bytes & Transactions & Precision & Recall & F1 \\
+\midrule
+455 (default) & 14,560 & 36.4 & 90.8\% & 90.8\% & 90.8\% \\
+242           &  7,760 & 19.4 & 94.2\% & 86.1\% & 89.9\% \\
+122 (cap 128) &  3,888 &  9.7 & 96.1\% & 80.2\% & 87.5\% \\
+64            &  2,048 &  5.1 & 94.8\% & 74.7\% & 83.5\% \\
+32            &  1,024 &  2.6 & 90.8\% & 65.5\% & 76.1\% \\
+\midrule
+sHash (oracle) & 32 & 0.08 & 66.5\% & 89.8\% & 76.4\% \\
+\bottomrule
+\end{tabular}
+\caption{Selected points of the size curve (geometric subset, best threshold per budget).}
+\label{tab:budget}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{128 landmarks is the practical sweet spot:} 3,888 bytes (about 10 transactions)
+        for F1 87.5, still far above sHash. As the budget shrinks, precision rises and recall
+        falls; ORB becomes a stricter matcher.
+  \item \textbf{32 landmarks is the floor:} 1,024 bytes, still 2.6 transactions, and F1 76.1,
+        which only ties sHash (76.4) at 32 times its size. Below this, the best threshold
+        collapses to ``flag everything''.
+\end{itemize}
+
+\paragraph{Conclusion.} There is no size at which ORB both fits in a transaction and beats
+sHash. The limit is architectural, not a matter of tuning: a signal made of a set of local
+features cannot travel in transaction metadata. The descriptor type also decides the index:
+one fixed-width string fits a BK-tree, while a set of binary descriptors needs LSH. The
+signal and its storage cannot be chosen separately. Section~\ref{sec:future} discusses ways
+around the limit.

@@ -1,0 +1,34 @@
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+
+A \emph{copymint} takes an existing NFT image, edits it slightly, and mints it as new.
+Kotzer et al.\ detect copymints with four perceptual image hashes (aHash, pHash, hsvHash
+and sHash), each searched in its own BK-tree, and call an image a copy when at least two of
+the four agree. Our project set out to make that detector cheaper to run. While
+reimplementing it we found that sHash, the hash meant to survive cropping, does not define a
+distance in the mathematical sense: comparing two images gives a different answer depending
+on which image comes first, and the triangle inequality does not hold. A BK-tree depends on
+both properties, so a search can silently skip a branch that holds a real copy.
+
+We therefore replaced sHash with ORB feature matching (keypoints, descriptor matching and
+RANSAC geometric verification) and kept everything else in the detector unchanged. On the
+geometric edits sHash was built for, ORB reaches F1 90.6 against 76.4 for sHash (+14.2),
+even though sHash was given a threshold chosen on the test set and ORB's was chosen on
+training data. Held at equal precision (91.2\%), sHash catches 27.2\% of copies and ORB
+90.0\%. In the full four-signal detector, with the paper's own thresholds left
+untouched, swapping only sHash for ORB raises F1 from 77.5 to 86.4 (+8.9): recall rises
+from 64.1\% to 77.2\% while precision stays at 98.1\%. When the paper's thresholds are
+re-tuned to our data the gain is 81.7 to 87.5 (+5.8).
+
+The improvement has a cost that we report as a finding. The paper stores its four hashes,
+about 56 bytes, inside each mint transaction (300--500 bytes). ORB needs about 14.5\,KB per
+image, roughly 36 transactions. Shrinking it removes the advantage before it fits: at 32
+landmarks (1\,KB, still 2.6 transactions) ORB only ties sHash.
+
+Finally, we built an \emph{edit classifier} that predicts from the query image alone which
+kind of edit was applied, so the detector could stop trusting signals known to fail on that
+edit. The classifier is accurate (100\% on the ``detail destroyed'' decision, 97.5\% F1 on
+``colour changed''), yet it does not improve the detector (F1 87.4 vs 87.5). A signal that
+breaks goes silent rather than voting wrongly, so ignoring it changes nothing. A
+multi-edit test then showed that the one situation where the classifier could help is not
+observable with our cues: pixelation erases the colour trace the classifier relies on.

@@ -1,0 +1,98 @@
+\section{Background}
+
+\subsection{Perceptual image hashes}
+
+All four of the paper's hashes come from Buchner's \texttt{imagehash} library~\cite{imagehash},
+which also produced the paper's reported numbers. Three of them are fixed-width binary
+strings compared with the Hamming distance (the number of differing bits):
+\begin{itemize}
+  \item \textbf{aHash} (64 bits): shrink to $8\times8$ grayscale and set each bit by whether
+        the pixel is brighter than the mean. A coarse brightness layout.
+  \item \textbf{pHash} (64 bits): shrink to $32\times32$, take the discrete cosine transform,
+        and threshold the $8\times8$ lowest frequencies at their median. Coarse shapes.
+  \item \textbf{hsvHash} (42 bits): a global histogram of the image's colours, with black, gray
+        and saturated pixels binned by hue. The paper's text describes a block-based HSV hash, but the
+        \texttt{colorhash()} function that generated its numbers is global. We followed the
+        code, since that is where the paper's numbers came from.
+\end{itemize}
+
+\textbf{sHash} is different. It segments the image into its largest regions and computes a
+64-bit dHash (a horizontal-gradient hash) of each region's bounding box. One image therefore
+yields a \emph{list} of hashes whose length depends on the image. The paper adds it
+specifically to survive cropping: if part of the image is cut away, the remaining large
+objects should still match.
+
+\subsection{The paper's detector}
+
+Each hash votes independently: it votes ``copy'' when the query's nearest stored image is
+within that hash's threshold. The \emph{2-Minimal} detector reports a copy when at least two
+of the four vote, which keeps false alarms low because no single hash has to be trusted on
+its own (Figure~\ref{fig:paper}). Formally, with $d_i$ the distance under hash $i$ and
+$t_i$ its threshold,
+\[
+  \mathrm{copy}(q,r) \;=\; \Bigl[\, \textstyle\sum_{i=1}^{4} \mathbb{1}\bigl[d_i(q,r)\le t_i\bigr] \;\ge\; 2 \,\Bigr].
+\]
+The thresholds given in the paper are aHash $\le 7$, pHash $\le 15$, hsvHash $\le 3$ and sHash
+$\le 17$~\cite{kotzer2025}.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw=ink2, rounded corners=2pt, minimum height=8mm, align=center, fill=white},
+  sig/.style={box, minimum width=27mm},
+  >={Stealth[length=2mm]}]
+  \node[box, minimum width=22mm] (q) {Query image\\[-1pt]\footnotesize a new mint};
+  \node[sig, right=14mm of q, yshift=16.5mm] (a) {aHash\\[-1pt]\footnotesize brightness layout};
+  \node[sig, below=2mm of a] (p) {pHash\\[-1pt]\footnotesize coarse shapes};
+  \node[sig, below=2mm of p] (h) {hsvHash\\[-1pt]\footnotesize colour mix};
+  \node[sig, below=2mm of h, draw=shashorange, very thick] (s) {sHash\\[-1pt]\footnotesize image pieces (cropping)};
+  \foreach \n in {a,p,h,s} {
+    \node[box, right=5mm of \n, minimum width=17mm, fill=rule!50] (t\n) {BK-tree};
+    \draw[->] (q.east) -- (\n.west);
+    \draw[->] (\n) -- (t\n);
+  }
+  \node[box, right=13mm of tp, yshift=-5mm, minimum width=22mm, fill=technion!8] (v) {$\ge 2$ of 4\\ agree?};
+  \foreach \n in {a,p,h,s} \draw[->] (t\n.east) -- (v.west);
+  \node[box, right=7mm of v, minimum width=14mm] (out) {copy /\\ not a copy};
+  \draw[->] (v) -- (out);
+\end{tikzpicture}
+\caption{The paper's 2-Minimal detector. Four hashes, each searched in its own BK-tree; a
+copy needs two votes. Our project replaces the highlighted sHash.}
+\label{fig:paper}
+\end{figure}
+
+\paragraph{Storage on the blockchain.} The paper proposes adding the four hashes as metadata
+fields of every mint transaction, so a validator can check a new mint ``in a reasonable time''
+without fetching images. It notes that a transaction is usually 300--500 bytes and that each
+hash needs only a few bytes, so the overhead is low~\cite{kotzer2025}. We use 400 bytes as a
+reference transaction. The four hashes take about 56 bytes: 24 fixed for aHash, pHash and
+hsvHash together, plus a median of 32 for sHash's variable-length list
+(Section~\ref{sec:storage}).
+
+\subsection{BK-trees need a metric}
+
+A BK-tree~\cite{burkhard1973} stores one item per node and labels each child edge with the
+child's distance from its parent. To find everything within distance $t$ of a query $q$, the
+search computes $d=d(q,\text{node})$ and descends only into child edges labelled in
+$[d-t,\,d+t]$. This pruning is what makes the tree fast, and it is only safe when the
+distance is a \emph{metric}: in particular it must be symmetric, $d(x,y)=d(y,x)$, and obey the
+triangle inequality, $d(x,z)\le d(x,y)+d(y,z)$. The paper states this requirement itself.
+Hamming distance on fixed-width strings is a metric. A distance between variable-length lists
+is not automatically one.
+
+\subsection{ORB, LSH and RANSAC}
+
+ORB (Oriented FAST and Rotated BRIEF)~\cite{rublee2011} finds \emph{keypoints}, corners and
+sharp junctions that can be found again after an edit, and describes the neighbourhood of
+each with a 256-bit (32-byte) binary descriptor. Each keypoint also gets an orientation, which
+is what lets matches survive rotation. Two images are compared by matching descriptors in
+Hamming distance. Many matches are coincidental, so RANSAC~\cite{fischler1981} searches for
+the single geometric transformation (here a homography) that the most matches agree on and
+discards the rest. The number of agreeing matches, the \emph{inliers}, is the similarity
+score.
+
+Because one image yields hundreds of descriptors rather than one string, ORB cannot be put in
+a BK-tree. The natural index for binary descriptors is locality-sensitive hashing
+(LSH)~\cite{gionis1999}, which places similar descriptors in the same bucket so that only a
+short list of candidates needs RANSAC verification.

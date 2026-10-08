@@ -1,0 +1,108 @@
+% Final project report -- build with:  tectonic report/main.tex
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{orbblue}{HTML}{2A78D6}
+\definecolor{shashorange}{HTML}{EB6834}
+\definecolor{ink2}{HTML}{52514E}
+\definecolor{rule}{HTML}{E4E3DF}
+\definecolor{technion}{HTML}{1B3A6B}
+
+\captionsetup{font=small,labelfont=bf}
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\parskip}{4pt}
+\titleformat{\section}{\Large\bfseries\color{technion}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+
+\lstset{basicstyle=\ttfamily\small,columns=fullflexible,keepspaces=true,
+        breaklines=true,frame=single,rulecolor=\color{rule},
+        xleftmargin=4pt,xrightmargin=4pt,aboveskip=6pt,belowskip=6pt,
+        escapeinside={(*}{*)}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{ink2}NFT Copymint Detection}
+\fancyhead[R]{\small\color{ink2}Final Project Report}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\fig}[1]{figures/#1}
+\newcommand{\docs}[1]{../docs/#1}
+
+\begin{document}
+
+\pagenumbering{alph}
+\begin{titlepage}
+  \centering
+  {\large Technion -- Israel Institute of Technology\par}
+  {\large Henry and Marilyn Taub Faculty of Computer Science\par}
+  \vspace{0.6cm}
+  {\normalsize 02360340 -- Project in Computer Communications\par}
+  \vspace{3.2cm}
+  {\color{technion}\rule{\linewidth}{1.2pt}\par}
+  \vspace{0.5cm}
+  {\Huge\bfseries NFT Copymint Detection\par}
+  \vspace{0.4cm}
+  {\Large Replacing a Broken Signal in an\\[2pt] NFT Copymint Detector\par}
+  \vspace{0.5cm}
+  {\color{technion}\rule{\linewidth}{1.2pt}\par}
+  \vspace{1.2cm}
+  {\Large Final Project Report\par}
+  \vfill
+  \begin{tabular}{rl}
+    \textbf{Team:} & Rabea Yassin, Ahmad Nassar \\[3pt]
+    \textbf{Instructor:} & Eran Tavor \\[3pt]
+    \textbf{Semester:} & Spring 2026 \\
+  \end{tabular}
+  \vspace{1.5cm}
+\end{titlepage}
+
+\pagenumbering{roman}
+\input{sections/abstract}
+\clearpage
+\tableofcontents
+\clearpage
+\listoffigures
+\listoftables
+\clearpage
+\pagenumbering{arabic}
+
+\input{sections/introduction}
+\input{sections/background}
+\input{sections/goals}
+\input{sections/architecture}
+\input{sections/method}
+\input{sections/shash}
+\input{sections/results}
+\input{sections/storage}
+\input{sections/classifier}
+\input{sections/discussion}
+\input{sections/conclusion}
+
+\clearpage
+\input{sections/references}
+
+\clearpage
+\appendix
+\input{sections/appendix}
+
+\end{document}

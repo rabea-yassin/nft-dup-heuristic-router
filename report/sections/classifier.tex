@@ -1,0 +1,150 @@
+\section{Finding 3: The Edit Classifier Does Not Improve the Detector}
+\label{sec:classifier}
+
+\subsection{The classifier is accurate}
+
+On the held-out test split (11,991 query images), the edit classifier's two decisions are:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Decision & Precision & Recall & F1 & Dangerous misses \\
+\midrule
+Detail destroyed? ($\Rightarrow$ distrust ORB)      & 100\%  & 100\%  & 100\%  & 0.0\% \\
+Colour changed? ($\Rightarrow$ distrust hsvHash)    & 98.1\% & 97.0\% & 97.5\% & 3.0\% \\
+\bottomrule
+\end{tabular}
+\caption{Edit classifier decisions on the held-out test split.}
+\label{tab:classifier}
+\end{table}
+
+A \emph{dangerous miss} is calling a pixelated image ``detail intact'', which would trust ORB
+exactly where it fails. This never happens: all 1,800 pixelated test images are recognised,
+including the $24\times24$ CryptoPunks where ORB itself is weakest. Raw eight-way accuracy is
+lower (89.2\%), almost entirely because an exact copy and an untouched image are identical
+pixel for pixel and cannot be told apart from the query alone. Both mean ``trust every
+signal'', so the confusion costs nothing.
+
+\subsection{But broken signals are silent, not wrong}
+
+Before using the classifier we measured, rather than assumed, which signal each edit breaks.
+Each signal was held at a fixed operating point flagging at most 10\% of non-copies, and for
+each edit we recorded both how many copies it catches and how often it fires on the
+\emph{wrong} original:
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{@{}lccc r@{}}
+\toprule
+Edit & aHash & pHash & hsvHash & ORB \\
+     & caught / wrong & caught / wrong & caught / wrong & caught \\
+\midrule
+Flip / rotate           & 5.0 / 0.4  & 2.8 / 0.4  & 77.8 / 7.3 & 81.7 \\
+Crop / reposition       & 26.1 / 1.8 & 38.7 / 1.7 & 77.8 / 7.4 & 98.3 \\
+Background colour       & 60.7 / 7.7 & 82.7 / 7.5 & 16.1 / 3.8 & 98.9 \\
+Colour swap / saturate  & 75.2 / 6.1 & 78.2 / 6.0 & 28.3 / 6.7 & 79.8 \\
+Pixelated               & 55.3 / 1.9 & 65.5 / 2.7 & 79.3 / 8.2 & 28.5 \\
+Text / logo             & 93.4 / 5.0 & 96.7 / 5.7 & 93.1 / 7.8 & 100 \\
+\midrule
+Untouched non-copies (false alarms) & 8.2 & 8.1 & 9.2 & 13.0 \\
+\bottomrule
+\end{tabular}
+\caption{Per-signal reliability map (\%). ``Caught'' is the share of that edit's copies the
+signal votes for; ``wrong'' is how often it votes for a deliberately wrong original.}
+\label{tab:reliability}
+\end{table}
+
+Where a signal's detection collapses, its false alarms collapse with it. aHash catches only
+5.0\% of rotated copies, and it fires on the wrong original only 0.4\% of the time. hsvHash on
+background changes catches 16.1\% and misfires 3.8\%, below its normal 9.2\%. A broken signal
+here does not vote randomly. It abstains. In a two-vote rule, telling the detector to ignore a
+signal that is already silent changes nothing.
+
+\subsection{Measured end to end}
+
+We compared the detector with ORB, with and without the classifier, at the same operating
+points as Table~\ref{tab:whole}:
+\begin{itemize}
+  \item static two-of-four with ORB: F1 87.5 (precision 97.8\%, recall 79.2\%);
+  \item classifier-guided, no fallback: F1 87.4;
+  \item classifier-guided with the static fallback: F1 87.5, identical to static.
+\end{itemize}
+The swap accounts for the whole gain; the classifier adds nothing measurable on top of it.
+
+The classifier could only help through the other lever: lowering the quorum. When two signals
+are distrusted at once, the vote falls to ``one of the remaining two''. With one edit per
+image, the classifier almost never distrusts two signals at once. A simulated third flag shows
+the lever is real. Distrusting aHash and pHash on rotated images leaves hsvHash and ORB and
+lowers the quorum to one, which raises flip/rotate recall from 58.4\% to 97.7\% at an
+unchanged 8.5\% false-alarm rate. But that flag's trigger reads transparent corners left by
+our generator's rotation, and it scores 0\% on the authors' images. It cannot be relied on, so
+it is not counted as a result.
+
+\subsection{The classifier is specific to our generator}
+
+On the authors' reference set the classifier degrades badly. Their CryptoPunks are already
+enlarged RGB images, ours are native $24\times24$ RGBA, so the transparency and histogram
+``combing'' cues it relies on disappear. It then over-predicts pixelation, and the colour
+decision drops to 0\% recall. Over-predicting pixelation only costs recall, because it makes
+the detector ignore ORB more often; it never makes the detector trust ORB wrongly. The
+classifier's accuracy above is therefore a result within our own generator, not evidence
+that it recognises edits in general.
+
+\subsection{The vote rule depends on how common copies are}
+
+Sweeping the quorum on our test set suggests that ``one of four'' beats the paper's ``two of
+four'' (F1 94.3 against 87.5). That is an artifact of a test set that is 82.6\% copies.
+Reweighting the same results to a realistic share of copies reverses it
+(Figure~\ref{fig:prevalence}): at 2\%, 10\% and 25\% copies, two of four is better. Real
+copymints are rare among all mints, so the paper's rule is the right one.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.66\linewidth]{\fig{fig_prevalence.pdf}}
+\caption{F1 of the ORB detector under the two vote rules, reweighted to an assumed share of
+copies. The paper's two-of-four rule wins wherever copies are uncommon.}
+\label{fig:prevalence}
+\end{figure}
+
+\subsection{Phase E: two edits on one image}
+
+If the classifier fails only because single-edit data never breaks two signals at once, then
+images with two edits should change the verdict. We generated every ordered pair of the six
+non-exact edits (30 combinations; 18,000 copies and 2,400 non-copies, 88.2\% copies). This
+test used the original panel with sHash, which stores nothing extra. The classifier would
+distrust sHash on pixelation (where sHash drops from 74.3\% on crops to 38.1\% while staying
+silent) and hsvHash on a colour change, lowering the quorum to one of two.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Detector (two-edit test set) & Precision & Recall & F1 & $\Delta$F1 \\
+\midrule
+Paper's panel (with sHash), static     & 96.7\% & 36.4\% & 52.9\% & --- \\
+Same panel, classifier-guided          & 96.7\% & 36.4\% & 52.9\% & +0.01 \\
+ORB in place of sHash, static          & 97.3\% & 45.1\% & 61.6\% & +8.7 \\
+\midrule
+Flag everything                        & 88.2\% & 100\%  & 93.8\% & \\
+\bottomrule
+\end{tabular}
+\caption{Phase E results. Precision is about equal across detectors, so recall is the fair
+comparison.}
+\label{tab:phasee}
+\end{table}
+
+The verdict did not change (Table~\ref{tab:phasee}). The reason is physical: \textbf{pixelation
+erases the colour trace.} To test whether the colour decision was merely being crowded out by
+pixelation in the eight-way classifier, we trained two independent yes/no detectors, one for
+destroyed detail and one for a colour change. The colour detector fires on 76--100\% of
+colour edits combined with any non-pixelation edit, and on 0\% of pixelation combined with a
+colour edit, in both orders. Pixelation collapses the palette, so the histogram combing the
+detector reads is gone. The one situation where the classifier could lower the quorum, detail
+destroyed \emph{and} colour changed, cannot be observed with these cues. Without the static
+fallback the classifier even hurts (F1 50.3), because it drops sHash's occasional correct vote
+without ever reaching the quorum change. Meanwhile the ORB swap still pays, at +8.7 F1.
+
+This conclusion is limited to our generator and our pixelation strength, which is severe
+(down to 4--12\% of the original size and back). Milder pixelation might leave a colour trace.
+We did not test that.

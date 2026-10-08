@@ -1,0 +1,72 @@
+\section{Goals and Timetable}
+\label{sec:goals}
+
+\subsection{Original goal}
+
+The original goal was \textbf{efficiency}: make the paper's detector cheaper to run without
+changing its answers. The idea was an \emph{edit classifier}. It would look at the query
+image first, predict what kind of edit had been applied, and run only the BK-tree searches
+that could still contribute a vote. For example, a pixelated image destroys the fine detail
+that a structure-based signal needs, so that signal's search could be skipped.
+
+The planned steps were:
+\begin{enumerate}
+  \item reimplement the paper's four hashes in C11, bit-exact against the reference library;
+  \item build a labelled dataset of NFT copies with known edits;
+  \item train the edit classifier;
+  \item benchmark the classifier-guided detector against the original for speed.
+\end{enumerate}
+
+\subsection{How the goals changed}
+
+To build the classifier we had to understand exactly where each signal breaks, and that
+work changed the project in three ways:
+\begin{itemize}
+  \item \textbf{sHash cannot be searched correctly} (Section~\ref{sec:shash}). Accelerating
+        four BK-tree searches makes little sense when one of the four trees can miss real copies.
+  \item \textbf{A C11-versus-Python speed comparison would not be a fair claim.} Our
+        instructor pointed out that comparing a C11 implementation against the paper's Python
+        mixes language effects with algorithmic ones.
+  \item \textbf{A better target existed.} The paper's own future-work section points at its
+        geometric blind spots, and feature matching addresses exactly those.
+\end{itemize}
+
+The revised goals were therefore about \textbf{accuracy}:
+\begin{enumerate}
+  \item replace sHash with a signal that does its job, cropping and rotation, and can be indexed
+        soundly;
+  \item measure the replacement fairly: against sHash on its own edits, inside the paper's
+        unchanged detector, and against its storage cost;
+  \item re-aim the edit classifier from speed to accuracy (stop trusting a signal on the edits
+        known to break it) and measure whether that helps.
+\end{enumerate}
+The C11 hash suite was kept as validated groundwork. The rest of the project was done in
+Python.
+
+\subsection{Timetable}
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}l X X@{}}
+\toprule
+Stage & Work & Outcome \\
+\midrule
+1. Learning & The paper, perceptual hashing, BK-trees, the \texttt{imagehash} code & Project plan \\
+2. Reproduction & C11 hash suite; differential tests on 600 images and the authors' data &
+  Bit-exact hashes; the sHash finding \\
+3. Pivot & sHash analysis; review of a first ORB pipeline & Old ORB numbers retired; pairwise
+  evaluation adopted \\
+4. Phase B: ORB & Pairwise ORB signal, threshold tuning, comparison with sHash, storage curve &
+  Results 1--2; storage finding \\
+5. Phase C: edit classifier & 93 features, Random Forest, per-signal reliability map &
+  Accurate classifier \\
+6. Phase D: full detector & Three-way comparison, comparison at the paper's own thresholds,
+  cross-generator check & Result 3; classifier adds $\approx 0$ \\
+7. Phase E: multi-edit test & Two-edit generator, independent classifier heads, four-way
+  comparison & The colour trace is erased by pixelation \\
+8. Write-up & Presentation, final report, poster & This document \\
+\bottomrule
+\end{tabularx}
+\caption{Project stages, in order.}
+\label{tab:timetable}
+\end{table}

@@ -51,7 +51,7 @@ from the Python API.
 *describes* hsvHash as a block/region-based hash citing Tang et al. 2013 — but `colorhash()`,
 the function that actually produced the paper's numbers, is a **global** histogram with no
 spatial blocks at all. We ported what the library does, not what the prose says, because the
-published numbers came from the library.
+reported numbers came from the library.
 
 Similarly, we could not tell from the paper whether sHash used `crop_resistant_hash`'s default
 parameters. We resolved it empirically: recomputing the authors' own CSV hash strings with the
@@ -205,7 +205,7 @@ The verdict is decided by **which collection an image belongs to**, not by wheth
 
 ### The proof: the confusion matrix reproduces from set membership alone
 
-`python/geometric/verify_baseline.py` predicts the published confusion matrix using nothing but
+`python/geometric/verify_baseline.py` predicts the reported confusion matrix using nothing but
 "is this filename in the gallery?" — pure set arithmetic, **no OpenCV, no image decoding**:
 
 | cell | reported | predicted from membership |
@@ -448,8 +448,8 @@ integer quantisation leaves behind after a brightness or saturation edit) is par
 **generator-specific**. A sufficiently rich classifier may learn *how our dataset was made*
 rather than how real copymints behave.
 
-Mitigation: also evaluate against the authors' `data/reference/test_manipulations/` set (405 real
-manipulated images plus their metadata CSV), which we hold and have already validated against.
+Mitigation: also evaluate against the authors' `data/reference/test_manipulations/` set (202 manipulated
+CryptoPunks and 200 originals, plus their metadata CSV), which we hold and have already validated against.
 This set was shared with us informally, so it stays local and is not redistributed.
 
 **Update: this caveat was not hypothetical — §8.4 measures it, and it bites.**
@@ -461,7 +461,7 @@ ML split. The paper does the **opposite**: Section IV-D trains on 20% of DISC21 
 
 The difference is justified by what "training" means in each case. The paper's training step only
 tunes **a handful of scalar Hamming thresholds** per hash, which needs very little data — so
-reserving 80% for test buys a statistically powerful evaluation of its published numbers. We train
+reserving 80% for test buys a statistically powerful evaluation of its reported numbers. We train
 an actual **RandomForest over 93 features across 8 classes**, which benefits from more examples
 than a few scalars do. Hence more data in train, not test.
 
@@ -738,13 +738,13 @@ must be read against §9.2 rather than in isolation.
 
 **The paper *as deployed*.** Row A above re-tunes the paper's hash thresholds to *our* split,
 an advantage a shipped detector never gets — it runs at **fixed** thresholds. Held to the paper's
-**own published** 2-Minimal thresholds (aHash≤7, pHash≤15, hsvHash≤3, sHash≤17;
+**own** 2-Minimal thresholds (aHash≤7, pHash≤15, hsvHash≤3, sHash≤17;
 `NFT_Duplications.pdf`, Table V), and swapping *only* sHash→ORB (the paper's other thresholds
 untouched), on the same test set:
 
 | detector, *as deployed* | P | R | **F1** |
 |---|---:|---:|---:|
-| Paper 2-Minimal @ its **published** thresholds (frozen) | 98.1% | 64.1% | **77.5%** |
+| Paper 2-Minimal @ its **own** thresholds (frozen) | 98.1% | 64.1% | **77.5%** |
 | **Swap — replace only sHash with ORB** | 98.1% | 77.2% | **86.4%** |
 | Paper 2-Minimal @ *our* re-tuned thresholds (= A) | 97.6% | 70.3% | 81.7% |
 
@@ -866,11 +866,11 @@ under fallback.
 
 **But +9.9 is measured against a handicapped paper.** Baseline A uses *our* re-tuned thresholds,
 looser than the paper's own and precision-wrecking at this low prevalence. Held to the paper's
-**published** thresholds — the honest "as deployed" baseline (§9.1) — and swapping only sHash→ORB:
+**own** thresholds — the honest "as deployed" baseline (§9.1) — and swapping only sHash→ORB:
 
 | detector, *as deployed* | P | R | **F1** |
 |---|---:|---:|---:|
-| Paper 2-Minimal @ its **published** thresholds (frozen) | 55.2% | 65.8% | **60.0%** |
+| Paper 2-Minimal @ its **own** thresholds (frozen) | 55.2% | 65.8% | **60.0%** |
 | **Swap — replace only sHash with ORB** | 48.0% | 93.1% | **63.3%** |
 | Paper 2-Minimal @ *our* re-tuned thresholds (= A) | 38.6% | 69.3% | 49.6% |
 
@@ -973,7 +973,7 @@ turns out to be a deeper result than Phase D's.
 The prize is **deployability**, and it turns on a cost asymmetry (§6): ORB's cost is on-chain
 **storage** (14.5 KB/NFT — fatal), while the router's cost is validator-side **compute** and it
 stores nothing. So the deployable detector is confined to the paper's four *cheap* hashes
-`{aHash, pHash, hsvHash, sHash}` (24–32 bytes), and the thesis is:
+`{aHash, pHash, hsvHash, sHash}` (≈56 bytes together), and the thesis is:
 
 > a router-**managed** detector over those four hashes beats the paper's **static** detector on
 > multi-manipulation — **without** sacrificing crop-resistance, adding nothing on-chain.

@@ -1,0 +1,93 @@
+\section{Finding 1: sHash Cannot Be Searched Correctly}
+\label{sec:shash}
+
+\subsection{How sHash compares two images}
+
+In the paper's storage design (its Fig.~11b) each sHash BK-tree node holds one image's list of
+piece hashes. Comparing image $A$, with pieces $a_1,\dots,a_m$, to image $B$, with pieces
+$b_1,\dots,b_n$, works as follows: for each piece of $A$, find its closest piece in $B$, then
+average those closest distances:
+\[
+  d_s(A \to B) \;=\; \frac{1}{m}\sum_{i=1}^{m}\;\min_{j}\; d_H(a_i, b_j).
+\]
+The averaging is not stated in the paper; it comes from the authors' code and data, which our
+C11 reimplementation reproduces exactly. Only the pieces of the first image have to find a
+match, so the comparison runs one way.
+
+\subsection{It is not symmetric}
+
+Let image A have 3 pieces and image B the same 3 plus one more that matches nothing in A
+(Figure~\ref{fig:asym}). With matching pieces 2 apart and the unmatched piece 34 from its
+nearest neighbour:
+\[
+  d_s(A\to B) = \tfrac{2+2+2}{3} = 2, \qquad d_s(B\to A) = \tfrac{2+2+2+34}{4} = 10.
+\]
+The same two images get two different answers. The data the authors shared with us shows this
+in practice. The paper's text describes comparing the \emph{new} image to the original, but
+their reported distances match the original$\to$copy direction on all 1,802 pairs and the
+copy$\to$original direction on only 240. With a one-way comparison, this is an easy detail to
+miss.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[font=\small, >={Stealth[length=2mm]},
+  pc/.style={draw=ink2, fill=orbblue!20, minimum size=6mm, rounded corners=1pt},
+  px/.style={draw=ink2, fill=shashorange!35, minimum size=6mm, rounded corners=1pt}]
+  \node at (0,1.0) {\textbf{Image A} (3 pieces)};
+  \foreach \i in {0,1,2} \node[pc] (a\i) at (\i*0.9-0.9,0.2) {};
+  \node at (5.2,1.0) {\textbf{Image B} (4 pieces)};
+  \foreach \i in {0,1,2} \node[pc] (b\i) at (\i*0.9+3.85,0.2) {};
+  \node[px] (b3) at (6.55,0.2) {};
+  \foreach \i in {0,1,2} \draw[<->, ink2] (a\i.south) to[bend right=25] node[pos=0.5, below, font=\footnotesize] {2} (b\i.south);
+  \node[font=\footnotesize, text=shashorange!80!black] at (6.55,-0.55) {no match: 34};
+  \node[align=left, anchor=west] at (8.0,0.45) {$A\to B = 2$};
+  \node[align=left, anchor=west] at (8.0,-0.15) {$B\to A = 10$};
+\end{tikzpicture}
+\caption{The sHash comparison is one-way. B's extra piece costs nothing when A is compared to
+B, and a lot when B is compared to A.}
+\label{fig:asym}
+\end{figure}
+
+\subsection{The triangle inequality fails}
+
+Let $A$ be an image of a cat, $C$ an image of a dog, and $B$ an image containing both. Take
+cat-to-cat and dog-to-dog pieces as 2 apart and cat-to-dog as 30 (illustrative values):
+\[
+  d(A,B) = 2, \qquad d(B,C) = \tfrac{30+2}{2} = 16, \qquad d(A,C) = 30 \;>\; 2 + 16 = 18.
+\]
+The direct distance is longer than the detour through $B$, which a metric does not allow. A
+composite image sits close to two unrelated images at once.
+
+\subsection{Why this loses real copies}
+
+The tree's pruning relies on exactly that inequality. Suppose the composite $B$ is stored at
+a node, and a genuine copy $X$ of a cat is stored below it. Because of $B$'s dog, the stored
+edge is $d(B,X)=16$. A cat query $q$ arrives with $d(q,B)=2$, and the true copy is only
+$d(q,X)=2$ away. With threshold $t=5$ the search descends only into edges in
+$[2-5,\,2+5]=[-3,7]$, so the edge labelled 16 is skipped (Figure~\ref{fig:prune}). The search
+reports ``no copy'' and nothing looks wrong. A silently missed copy is the most costly error
+for this system.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[font=\small, >={Stealth[length=2mm]},
+  n/.style={draw=ink2, circle, minimum size=9mm, align=center, fill=white}]
+  \node[n] (B) at (0,0) {B\\[-3pt]\footnotesize cat+dog};
+  \node[n, fill=rule!60] (X) at (0,-2.4) {X\\[-3pt]\footnotesize cat};
+  \node[n, draw=orbblue, very thick] (q) at (-4.2,0) {q\\[-3pt]\footnotesize cat};
+  \draw[->] (B) -- node[right] {stored edge 16} (X);
+  \draw[->, dashed, ink2] (q) -- node[above] {$d(q,B)=2$} (B);
+  \draw[->, dashed, orbblue] (q) -- node[below left] {true $d(q,X)=2$} (X);
+  \node[anchor=west, align=left, font=\footnotesize] at (2.4,-0.6)
+    {threshold $t=5$\\ search visits edges in $[-3,\,7]$\\ edge 16 is skipped:\\ \textbf{the real copy is never checked}};
+\end{tikzpicture}
+\caption{A BK-tree search missing a real copy because the sHash comparison breaks the triangle
+inequality.}
+\label{fig:prune}
+\end{figure}
+
+We shared this analysis with the authors, who replied that it may help explain why the tree's
+results are not perfect. Our claim is limited to what the code and the mathematics show: the sHash
+comparison is not a metric, so standard BK-tree pruning can miss a valid match. This changed
+the project. It made little sense to accelerate a search structure that can miss real copies,
+so we turned to replacing the signal.

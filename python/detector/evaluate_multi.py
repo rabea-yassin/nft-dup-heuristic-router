@@ -6,7 +6,7 @@ is tuned on multi_train and reported on multi_test (tune-on-train, §4/§8.3):
 
   A  static {aHash,pHash,hsvHash,sHash} k=2  -- THE PAPER'S OWN METHOD; the number to beat.
   B  router-MANAGED, SAME panel {a,p,hsv,sHash} -- so B - A is PURELY the router. The
-       deployable enhancement (4 small hashes, 24-32 B; no ORB). Multi-label heads
+       deployable enhancement (4 small hashes, ~56 B; no ORB). Multi-label heads
        (train_multilabel.py) gate it: P_detail>tau -> distrust sHash; P_colour>tau ->
        distrust hsvHash; then a quorum over the survivors, with a static-k=2 fallback so
        it is never worse than A.

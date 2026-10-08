@@ -1,0 +1,98 @@
+\section{Architecture}
+\label{sec:architecture}
+
+\subsection{The detector we evaluate}
+
+Our detector keeps the paper's design intact and changes exactly one component: ORB replaces
+sHash as the fourth signal. The other three hashes, their thresholds and the two-vote rule are
+untouched, so any change in accuracy can be attributed to the swap
+(Figure~\ref{fig:ours}). The edit classifier is an optional addition, drawn dashed. It reads
+only the query and tells the vote which signals to ignore. Section~\ref{sec:classifier} shows
+that it does not change the result, so every headline number in this report is for the
+detector without it.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw=ink2, rounded corners=2pt, minimum height=8mm, align=center, fill=white},
+  sig/.style={box, minimum width=22mm},
+  >={Stealth[length=2mm]}]
+  \node[box, minimum width=20mm] (q) {Query\\ image};
+  \node[box, minimum width=20mm, below=6mm of q] (r) {Stored\\ original};
+  \node[sig, right=16mm of q, yshift=10mm] (a) {aHash};
+  \node[sig, below=2mm of a] (p) {pHash};
+  \node[sig, below=2mm of p] (h) {hsvHash};
+  \node[sig, below=2mm of h, draw=orbblue, very thick] (o) {ORB\\[-1pt]\footnotesize replaces sHash};
+  \coordinate (mid) at ($(q.east)!0.5!(r.east)$);
+  \foreach \n in {a,p,h,o} \draw[->] ($(mid)+(4mm,0)$) -- (\n.west);
+  \draw (q.east) -| ($(mid)+(4mm,0)$);
+  \draw (r.east) -| ($(mid)+(4mm,0)$);
+  \node[box, right=12mm of p, yshift=-5mm, minimum width=22mm, fill=technion!8] (v) {$\ge 2$ of 4\\ agree?};
+  \foreach \n in {a,p,h,o} \draw[->] (\n.east) -- (v.west);
+  \node[box, right=7mm of v, minimum width=14mm] (out) {copy /\\ not a copy};
+  \draw[->] (v) -- (out);
+  \node[box, dashed, minimum width=34mm] (ec) at ($(v.north)+(0,19mm)$) {edit classifier\\[-1pt]\footnotesize (optional; Section~\ref{sec:classifier})};
+  \draw[->, dashed] (q.north) |- (ec.west);
+  \draw[->, dashed] (ec) -- node[right, font=\footnotesize] {which signals to trust} (v);
+\end{tikzpicture}
+\caption{The detector we evaluate: the paper's design with ORB in place of sHash. The dashed
+edit classifier is evaluated separately and is not part of the headline results.}
+\label{fig:ours}
+\end{figure}
+
+\subsection{The ORB signal in three stages}
+
+\begin{enumerate}
+  \item \textbf{Find landmarks and match them.} ORB finds a few hundred keypoints per image and
+        describes each one; descriptors are matched between the two images by Hamming distance
+        with cross-checking (Figure~\ref{fig:matches}).
+  \item \textbf{Search a whole collection.} In deployment a new mint must be compared against
+        every stored image. LSH buckets similar descriptors so that only a short list of
+        candidates reaches stage~3. \emph{Every accuracy number in this report compares two
+        images directly, with no index involved}, so none of the accuracy comes from this
+        stage.
+  \item \textbf{Throw out coincidences.} RANSAC finds the one homography that most matches
+        agree on. The number of agreeing matches (inliers) is the score. A pair is a copy when
+        the score exceeds a threshold: more than 16 in the signal study of
+        Section~\ref{sec:results}, and more than 23 inside the full detector, where every
+        signal is held to the same false-alarm budget (Section~\ref{sec:method}).
+\end{enumerate}
+
+\paragraph{Resolution normalisation.} CryptoPunks are $24\times24$ pixel art, while ORB's default
+patch and border sizes are 31 pixels. On a native punk ORB finds no keypoints at all. Every
+image is therefore scaled to a common 256-pixel working edge before ORB, using
+nearest-neighbour interpolation when enlarging so that pixel-art edges stay sharp (225
+keypoints on average, against 186 with Lanczos and 0 at native size).
+
+\begin{figure}[ht]
+\centering
+\begin{subfigure}{0.49\linewidth}
+  \includegraphics[width=\linewidth]{\docs{orb_match.png}}
+  \caption{Cropped and repositioned copy: 154 inliers.}
+\end{subfigure}\hfill
+\begin{subfigure}{0.49\linewidth}
+  \includegraphics[width=\linewidth]{\docs{orb_match_rotate.png}}
+  \caption{Rotated copy: 204 inliers.}
+\end{subfigure}
+\caption{Real output of our ORB signal. Each green line is a match that RANSAC kept because it
+agrees with one geometric transformation. Hundreds of independent matches agreeing on one
+transformation does not happen by chance.}
+\label{fig:matches}
+\end{figure}
+
+\subsection{The edit classifier}
+
+The edit classifier receives \emph{only the query image}; at check time there is no
+original to compare against. It computes 93 single-image features (48 of them colour-histogram
+bins; the rest measure palette size, flat-neighbour fraction, transparency at the corners,
+sharpness and histogram ``combing'') and feeds them to a Random Forest~\cite{breiman2001,sklearn}
+that outputs a probability for each of the eight edit labels. The detector uses two summed
+probabilities rather than the top label:
+\begin{align*}
+  P(\text{detail destroyed}) &= P(\text{pixelated}) &&\Rightarrow\ \text{stop trusting ORB}\\
+  P(\text{colour changed})   &= P(\text{colour swap}) + P(\text{background change}) &&\Rightarrow\ \text{stop trusting hsvHash}
+\end{align*}
+When signals are distrusted, the vote is taken among the remaining ones (``two of the
+trusted'', falling to one of two when only two remain). A static fallback keeps the original
+two-of-four verdict whenever it fires, so the classifier can only add detections.

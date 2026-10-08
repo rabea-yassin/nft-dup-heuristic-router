@@ -1,0 +1,141 @@
+\section{Results: ORB in Place of sHash}
+\label{sec:results}
+
+\subsection{Result 1: head to head, on the edits sHash was built for}
+
+sHash exists to survive cropping and other geometric edits, so the first test uses exactly
+those: the 3,600 test copies made by crop/resize/reposition and flip/rotate, plus the 2,400
+non-copies, 60\% copies in all. The comparison is deliberately tilted against ORB. ORB's
+threshold ($>16$ inliers) was chosen on training data. sHash was given its best possible
+threshold, chosen by sweeping \emph{the test set itself} ($d_s\le 28$), which no real
+deployment could do.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Signal & Threshold & Precision & Recall & F1 \\
+\midrule
+sHash (oracle threshold, chosen on test) & $d_s \le 28$ & 66.5\% & 89.8\% & 76.4\% \\
+ORB (threshold chosen on train)          & inliers $>16$ & \textbf{91.2\%} & \textbf{90.0\%} & \textbf{90.6\%} \\
+\midrule
+Flag everything                          & ---          & 60.0\% & 100\% & 75.0\% \\
+\bottomrule
+\end{tabular}
+\caption{ORB against sHash on the geometric subset (3,600 copies, 2,400 non-copies).}
+\label{tab:h2h}
+\end{table}
+
+ORB scores \textbf{+14.2 F1} on the subset sHash was designed for, with sHash holding the
+oracle advantage. The recall column looks like a tie (89.8\% vs 90.0\%), but it is not. sHash
+reaches its recall by flagging almost everything: \textbf{1,630 of the 2,400 non-copies}
+(68\%), against roughly 310 (about 13\%) for ORB. Its precision (66.5\%) is barely above the
+60\% share of copies, and its F1 is only 1.4 points above flagging everything. Held at
+ORB's precision of 91.2\%, sHash catches \textbf{27.2\%} of the copies against ORB's
+\textbf{90.0\%} (Figure~\ref{fig:h2h}). There is no threshold at which sHash is the better
+choice.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.66\linewidth]{\fig{fig_head_to_head.pdf}}
+\caption{Result 1. Left: F1 on the geometric subset, with the flag-everything level marked.
+Right: recall when both signals are held at 91.2\% precision.}
+\label{fig:h2h}
+\end{figure}
+
+\subsection{Result 2: recall by kind of edit}
+
+Figure~\ref{fig:byedit} breaks ORB's recall down by edit type over the whole single-edit test
+set, at the same $>16$ cutoff. At that cutoff ORB's precision on the geometric subset is
+91.2\%, and it flags 13.0\% of all non-copies.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.68\linewidth]{\fig{fig_by_edit_type.pdf}}
+\caption{Result 2. Share of each edit's copies that ORB catches (inliers $>16$). *Our
+flip/rotate category always includes a rotation; pure mirrors alone are caught 100\%.}
+\label{fig:byedit}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{It does the job it was brought in for.} Crop/reposition: 98.3\%.
+  \item \textbf{It also survives edits we did not aim it at.} A recoloured background (98.9\%)
+        and a pasted logo (100\%) barely disturb the shapes ORB matches. ORB is better described
+        as a \emph{structure} signal than a geometric one: it works wherever local structure
+        survives.
+  \item \textbf{Flip/rotate (81.7\%) is a rotation result.} Scoring the parts separately on 120
+        test originals shows pure mirrors at 100\% for all three collections. The whole deficit
+        is rotated CryptoPunks: rotation and resizing blur the hard pixel-art edges ORB relies
+        on, and a $24\times24$ image has no detail to spare.
+  \item \textbf{One clean failure: pixelation} (28.5\%). Pixelation destroys the fine detail
+        that corners are made of. The other signals still cover it: at operating points that flag
+        under 10\% of non-copies, pHash catches 65.5\% of pixelated copies and hsvHash 79.3\%.
+\end{itemize}
+
+\paragraph{CryptoPunks are the hard case.} At a 9.9\% false-alarm rate, ORB catches 100\% of
+geometric copies for Azuki and BAYC but 68.5\% for CryptoPunks. Enlarging a $24\times24$ image
+recovers keypoints but cannot create detail that was never there. CryptoPunks is also the
+collection the paper used for its main evaluation.
+
+\subsection{Result 3: inside the whole detector}
+
+The decisive test changes one signal and leaves everything else as the paper specifies it:
+the same three hashes, the same thresholds, the same two-of-four rule. On our full single-edit
+test set (11,400 copies, 2,400 non-copies):
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Detector (2 of 4 agree) & Precision & Recall & F1 \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{Paper's own thresholds, frozen}} \\
+\quad with sHash (the paper's detector)     & 98.1\% & 64.1\% & 77.5\% \\
+\quad with ORB in place of sHash           & 98.1\% & \textbf{77.2\%} & \textbf{86.4\%} \\[3pt]
+\multicolumn{4}{@{}l}{\emph{Thresholds re-tuned to our training data}} \\
+\quad with sHash                           & 97.6\% & 70.3\% & 81.7\% \\
+\quad with ORB in place of sHash           & 97.8\% & \textbf{79.2\%} & \textbf{87.5\%} \\
+\midrule
+Flag everything                            & 82.6\% & 100\% & 90.5\% \\
+\bottomrule
+\end{tabular}
+\caption{The full detector before and after the swap. ORB votes at $>23$ inliers in both
+settings.}
+\label{tab:whole}
+\end{table}
+
+Against the paper's detector at its own thresholds, the swap raises F1 from 77.5 to 86.4,
+\textbf{+8.9}. Because precision is 98.1\% in both rows, this is a clean comparison at equal
+precision: recall rises from 64.1\% to 77.2\%, about 1,500 more of the 11,400 copies caught
+at the same precision. Re-tuning the paper's thresholds to our data
+helps the paper (77.5 to 81.7); the swap still wins, 81.7 to 87.5 (\textbf{+5.8}).
+ORB votes at $>23$ inliers in both settings. The re-tuned baseline's gain comes from the other
+hashes: pHash moves from $\le15$ to $\le19$, and in the paper's detector sHash from $\le17$ to
+$\le21$.
+
+The gain is located where Result~2 predicts. In the re-tuned detector, flip/rotate copies go
+from 14.1\% to 58.4\% caught and crop/reposition from 69.9\% to 80.9\%. Pixelated copies drop
+slightly, from 71.1\% to 66.4\%, because sHash sometimes still voted there and ORB does not.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.74\linewidth]{\fig{fig_whole_detector.pdf}}
+\caption{Result 3. F1 of the full two-of-four detector with sHash and with ORB, at the paper's
+own thresholds, at thresholds re-tuned to our data, and on the authors' reference set.}
+\label{fig:whole}
+\end{figure}
+
+\paragraph{The authors' reference set.} On the 1,802 pairs the authors shared with us (202
+copies, 1,600 manipulated non-copies, an 11.2\% copy rate where flagging everything scores only
+20.2), the paper's detector at its own thresholds scores F1 60.0 (precision 55.2\%,
+recall 65.8\%). Swapping in ORB scores 63.3 (precision 48.0\%, recall 93.1\%), a modest
+\textbf{+3.3}. Here the swap trades precision for recall rather than holding precision
+equal, and the margin depends on ORB's threshold: at the looser $>16$ the swapped detector
+falls to 54.8 and loses. We therefore read it as a modest, threshold-sensitive confirmation on
+an independent generator, not as a headline result.
+
+\paragraph{Comparison with the paper's own numbers.} We do not claim to beat the paper's
+reported accuracy. Its tables report the 2-Minimal detector's detection rates on duplicates and
+non-duplicates (for example 88.4\% and 94.13\% on DISC21) on a benchmark and search
+pipeline we did not reproduce. Those figures are not comparable to our pairwise precision,
+recall and F1.

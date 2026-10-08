@@ -1,0 +1,88 @@
+\section{Discussion}
+
+\subsection{What we learned}
+
+\begin{enumerate}
+  \item \textbf{Check the mathematics before optimising it.} We set out to make a search faster
+        and found that the search itself was unsound. Speed is worth nothing until the
+        structure returns correct answers.
+  \item \textbf{How a signal is stored decides how it can be searched.} One fixed-width string
+        fits a BK-tree and a transaction field. A set of landmarks needs a different index and far
+        more space. The signal and its storage cannot be chosen separately, and that is what the
+        14.5\,KB figure really says.
+  \item \textbf{An accurate component is not the same as a useful one.} The edit classifier is
+        excellent at its own task and changes nothing end to end, because the vote it feeds is
+        unaffected by removing a signal that was already silent. A negative result is still a
+        result, and it became informative once we could explain it.
+  \item \textbf{Reproduce the code, not only the text.} Library defaults, preprocessing,
+        numeric precision and the direction of a comparison are part of the experiment. Where
+        the paper's description and its code differed, the code produced the numbers.
+  \item \textbf{Treat the evaluation as part of the engineering.} Several numbers that looked
+        reasonable turned out to be wrong:
+        \begin{itemize}
+          \item an ORB baseline decided by gallery membership;
+          \item an sHash threshold that, chosen to maximise F1 on a copy-heavy set, became
+                ``flag everything'';
+          \item an ORB vote that was looser than the other three signals;
+          \item a label-parsing bug that made every row a copy.
+        \end{itemize}
+        Each was caught by comparing against the flag-everything level, checking the class
+        balance, or noticing that a threshold sweep landed at the edge of its range.
+\end{enumerate}
+
+\subsection{Difficulties}
+
+\begin{itemize}
+  \item \textbf{Exact reproduction.} Bit-exact parity with \texttt{imagehash} required reading
+        Pillow's C source to reproduce its mixed float/double arithmetic.
+  \item \textbf{Silent failures.} ORB returns nothing below about 31 pixels, and the original
+        pipeline dropped those images without a warning. Nothing crashed; an entire collection
+        simply vanished from the evaluation.
+  \item \textbf{A copy-heavy test set.} Because 82.6\% of test pairs are copies, maximising F1
+        quietly rewards permissive detectors. We had to compare at equal precision and
+        reweight to realistic copy rates to draw fair conclusions.
+  \item \textbf{Our own generator.} Our labelled copies come from one PIL-based generator. The
+        classifier partly learned how our generator works rather than what an edit looks like,
+        which the authors' independent images exposed.
+\end{itemize}
+
+\section{Limitations and Future Work}
+\label{sec:future}
+
+\paragraph{Getting around ORB's storage cost.} We analysed three options; none was built:
+\begin{itemize}
+  \item \textbf{Store descriptors off-chain with an on-chain commitment} (our preferred option):
+        the transaction keeps a small hash of the descriptor set, and validators fetch the
+        descriptors when needed. It gives up the paper's self-contained design.
+  \item \textbf{Aggregate the descriptors into one fixed-size vector} (VLAD or bag of visual words).
+        It fits the budget but loses the RANSAC geometric check that makes ORB accurate.
+  \item \textbf{Recompute descriptors on demand} from the image. Nothing is stored, but this
+        gives up the speed that is the reason the paper stores hashes on-chain in the first
+        place.
+\end{itemize}
+We did test the remaining storage-free route, a classifier-guided detector over the paper's
+four cheap hashes, in Phase E: it gained +0.01 F1. A two-stage design, in which the cheap
+on-chain hashes shortlist candidates and off-chain ORB verifies them, is an untested idea for
+future work.
+
+\paragraph{Pixelation.} ORB's one clean failure. The paper's coarse hashes already cover it
+(pHash 65.5\%, hsvHash 79.3\%), but a structure signal that survives pixelation would close
+the gap. Our pixelation is also severe; the Phase E conclusion should be repeated across a
+range of pixelation strengths.
+
+\paragraph{Tiny images.} $24\times24$ pixel art is genuinely hard for any local-feature method.
+A detector could recognise low-resolution images and choose a representation suited to them.
+
+\paragraph{A classifier that generalises.} The classifier's colour decision is specific to our
+generator and fails on the authors' images. Training on several generators, resolutions and
+image formats, and dropping generator-specific features such as transparent corners, would
+be the first step. A more direct design would predict each signal's reliability rather than an
+edit label.
+
+\paragraph{Search at scale.} All accuracy numbers are pairwise. A deployed ORB path also needs
+the LSH index and candidate verification to be benchmarked for retrieval recall, latency and
+memory.
+
+\paragraph{A shared benchmark.} The authors' set is valuable but small and CryptoPunk-only. A
+public benchmark with several collections, separate rotation and mirror labels, combined edits
+and manipulated non-copies would make results like ours easier to compare.

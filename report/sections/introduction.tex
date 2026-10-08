@@ -1,0 +1,55 @@
+\section{Introduction}
+
+\subsection{General description}
+
+Non-fungible tokens (NFTs) are blockchain records that point to a digital asset, most often
+an image. The blockchain proves who owns a token and how it changed hands, but nothing stops
+a second party from downloading the image, changing it a little, and minting the result as
+a new token. Such copies are called \emph{copymints}. They lower the value of the original,
+mislead buyers, and are common enough that marketplaces such as OpenSea publish policies
+against them~\cite{kotzer2025}.
+
+Detecting a copymint is an image-similarity problem, not an integrity problem.
+A cryptographic hash such as SHA-256 is useless here by design: changing one pixel produces
+an unrelated digest. A \emph{perceptual} hash has the opposite goal: images that look alike
+should produce hashes that are close, for example in Hamming distance. A single perceptual
+hash is not enough, though, because each one survives some edits and fails on others. A
+colour histogram survives rotation but not recolouring. A coarse brightness layout survives
+recolouring but not rotation.
+
+\subsection{The starting point}
+
+Our project extends the detector of Kotzer, Reviriego, Conde Diaz and
+Rottenstreich~\cite{kotzer2025,kotzer2024}. It computes four perceptual hashes per image,
+aHash, pHash, hsvHash and sHash, stores each in its own BK-tree, and flags a query as a copy
+when at least two of the four find a match within their thresholds (the paper's
+\emph{2-Minimal} detector). The paper also proposes storing the four hashes inside every
+mint transaction, so that any validator can check a new mint without downloading images.
+
+\subsection{What this report covers}
+
+We set out to make that detector cheaper to run, using a classifier that predicts the kind of edit
+and skips searches that cannot help (Section~\ref{sec:goals}). Reimplementing the detector
+changed the direction of the project. We found that sHash cannot be searched correctly in a
+BK-tree (Section~\ref{sec:shash}), replaced it with ORB feature matching, and measured the
+replacement on its own, inside the full detector, and against its storage cost
+(Sections~\ref{sec:results}--\ref{sec:storage}). We also built the edit classifier and
+measured why it does not improve accuracy (Section~\ref{sec:classifier}).
+
+The main contributions are:
+\begin{enumerate}
+  \item a from-scratch C11 reimplementation of the paper's four hashes, bit-exact against the
+        library that produced the paper's numbers;
+  \item a demonstration that the sHash comparison is not a metric, and a concrete case in
+        which a BK-tree search misses a real copy because of it;
+  \item an ORB-based replacement for sHash, measured against sHash on the edits sHash was
+        designed for and inside the paper's full detector;
+  \item a measurement of what the replacement costs in storage, at every descriptor budget;
+  \item an edit classifier, and an explanation, backed by experiments, of why it does not
+        improve the detector.
+\end{enumerate}
+
+\paragraph{How to read the numbers.} Our test set is 82.6\% copies. On such a set a
+detector that answers ``copy'' for everything already scores F1 90.5. A raw F1 can
+therefore flatter a permissive detector, so throughout this report we give precision next to
+every recall and compare detectors at equal precision wherever possible.

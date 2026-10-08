@@ -1,0 +1,107 @@
+\section{Setup and Run Guide}
+\label{app:setup}
+
+Everything in this report can be reproduced from the project repository. The datasets and
+score caches are not tracked in git (they are large and regenerable), so a fresh checkout
+starts by rebuilding them. Each script's header comment documents its options.
+
+\subsection{Environment}
+
+Python 3.12 with the pinned dependencies in \texttt{training/requirements.txt} (Pillow,
+NumPy, ImageHash, SciPy, OpenCV headless, scikit-learn~\cite{opencv,sklearn}). The versions are
+pinned because a change in a resampling filter would silently change what ``matching the
+paper'' means.
+\begin{lstlisting}
+python3 -m venv training/.venv
+training/.venv/bin/pip install -r training/requirements.txt
+\end{lstlisting}
+Below, \texttt{py} stands for \texttt{training/.venv/bin/python}. Evaluation scripts default
+to the test split.
+
+\subsection{Data}
+
+\begin{enumerate}
+  \item Download the Kaggle \texttt{shaunmak/nft-classifier} set and flatten its 3,000 images
+        into \texttt{data/raw/} as \texttt{azuki\_\#<id>.png}, \texttt{bayc\_\#<id>.png} and
+        \texttt{cp\_\#<id>.png}. A two-image example of the layout is tracked in
+        \texttt{data/example/}.
+  \item Generate the labelled copies. The split is by base image, 80/20, seed 42:
+\begin{lstlisting}
+py training/generate_dataset.py                 # data/train, data/test
+py training/generate_dataset.py --mode compose  # data/multi_{train,test}
+\end{lstlisting}
+\end{enumerate}
+
+\subsection{Scoring (cached, run once per split)}
+
+\begin{lstlisting}
+# run each line with --split train, then --split test
+py python/geometric/score_dataset.py  --workers 8   # ORB inliers
+py python/geometric/shash_baseline.py --workers 8   # sHash distances
+py python/router/hash_reliability.py                # other hashes, reliability
+py python/router/extract_features.py  --workers 8   # 93 classifier features
+\end{lstlisting}
+Parallel runs (\texttt{--workers}) were checked to give the same output as serial ones.
+
+\subsection{Training and evaluation}
+
+\begin{lstlisting}
+py python/geometric/tune.py --split train  # ORB threshold (> 16)
+py python/router/train_router.py          # edit classifier
+py python/router/train_multilabel.py      # independent heads (Phase E)
+
+py python/geometric/compare_shash.py      # Result 1, Table (*\ref{tab:h2h}*)
+py python/geometric/evaluate.py --threshold 16    # Result 2
+py python/geometric/diagnose_flip.py      # mirror vs rotation
+py python/geometric/descriptor_budget.py  # storage, Table (*\ref{tab:budget}*)
+py python/router/evaluate_router.py       # classifier, Table (*\ref{tab:classifier}*)
+py python/detector/evaluate_routed.py     # with/without classifier
+py python/detector/evaluate_deployed.py   # Result 3, Table (*\ref{tab:whole}*)
+py python/detector/evaluate_multi.py      # Phase E, Table (*\ref{tab:phasee}*)
+py python/detector/evaluate_reference.py  # authors' reference set
+
+python3 report/figures/make_figures.py    # every chart in this report
+\end{lstlisting}
+The authors' reference set is not distributed with the repository; the last detector command
+needs it in \texttt{data/reference/test\_manipulations/}.
+\texttt{python/geometric/verify\_baseline.py} reproduces the retired baseline's confusion
+matrix; it reads that pipeline's original gallery files, passed with \texttt{--project}.
+
+\subsection{C11 hash suite}
+
+The bit-exact C11 reimplementation in \texttt{src/hashes/} builds with CMake:
+\begin{lstlisting}
+cmake -S . -B build && cmake --build build
+\end{lstlisting}
+
+\section{Operating Points}
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Signal & Paper's own & Our detector & Signal study \\
+       & thresholds        & ($\le$10\% false alarms on train) & (geometric subset) \\
+\midrule
+aHash   & $\le 7$  & $\le 7$  & --- \\
+pHash   & $\le 15$ & $\le 19$ & --- \\
+hsvHash & $\le 3$  & $\le 3$  & --- \\
+sHash   & $\le 17$ & $\le 21$ & $\le 28$ (oracle, chosen on test) \\
+ORB     & ---      & $> 23$ inliers & $> 16$ inliers (chosen on train) \\
+\bottomrule
+\end{tabular}
+\caption{Thresholds used in this report. Hash thresholds are Hamming distances; sHash's is its
+averaged one-way distance.}
+\label{tab:thresholds}
+\end{table}
+
+\section{Data Notes}
+
+\begin{itemize}
+  \item The generated dataset comes from public Kaggle collections; the generator and a small
+        example are in the repository.
+  \item The authors' reference set (202 manipulated CryptoPunks, 200 originals, 1,802 labelled
+        pairs) was shared with us privately. It is kept locally and not redistributed.
+  \item All accuracy figures are pairwise. No index or gallery is involved in any reported
+        number.
+\end{itemize}

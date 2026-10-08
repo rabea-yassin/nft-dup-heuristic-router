@@ -27,12 +27,12 @@ Both changes target **accuracy**, not speed.
 
 ### The result in one table
 
-The paper's detector **as it would actually be deployed** — its own published 2-Minimal
+The paper's detector **as it would actually be deployed** — its own 2-Minimal
 thresholds, frozen — vs the swap (replace only `sHash` with ORB), on our test set:
 
 | detector, on our test set | precision | recall | **F1** |
 |---|---:|---:|---:|
-| Paper 2-Minimal @ its **published** thresholds (as deployed) | 98.1% | 64.1% | **77.5%** |
+| Paper 2-Minimal @ its **own** thresholds (as deployed) | 98.1% | 64.1% | **77.5%** |
 | **Swap — replace only `sHash` with ORB** | 98.1% | 77.2% | **86.4%** |
 | Paper 2-Minimal @ *our* re-tuned thresholds | 97.6% | 70.3% | 81.7% |
 
@@ -67,7 +67,7 @@ A BK-tree requires a true metric. sHash produces a *variable-length list* of per
 compared by a directional mean-of-minimums — which is **asymmetric** and **violates the triangle
 inequality**. A composite image can act as a "bridge" that makes two unrelated images look
 connected, and pruning can silently discard a real match (a false negative — the worst error class
-here). On the authors' own reference CSV, the `original→copy` direction reproduces their published
+here). On the authors' own reference CSV, the `original→copy` direction reproduces their reported
 distance on **1,802/1,802** rows while `copy→original` matches only **240** — the asymmetry is not
 hypothetical. Raised with the authors; **tentatively confirmed by Arad, not yet formally resolved.**
 
@@ -95,7 +95,7 @@ at, and where ORB is strongest.*
 
 **3. A feature-matching signal cannot ride in transaction metadata** *(PROGRESS.md §6)*
 The paper's premise is that detection is "fully self-contained within the blockchain": hashes ride
-in a 300–500 byte transaction. That holds for the four hashes (24–32 bytes). It **breaks** for ORB,
+in a 300–500 byte transaction. That holds for the four hashes (≈56 bytes together). It **breaks** for ORB,
 which emits ~455 descriptors ≈ **14.5 KB — 36× an entire transaction**. We measured the whole
 accuracy-vs-bytes curve; the best usable point is still ~10× a transaction. This is an
 **architectural** boundary, not a tuning problem, and we report it as a finding rather than
@@ -145,7 +145,7 @@ directly rather than maintaining a second reimplementation.
 - **The `colorhash()` correction.** The paper's §II-C(v) *describes* hsvHash as a block/region
   statistical hash citing Tang et al. 2013 — but `colorhash()` is actually a **global** histogram
   (fractions of black/gray/hue-binned-saturated pixels across the whole image), a different
-  algorithm entirely. Since the paper's published numbers were produced by whatever the library
+  algorithm entirely. Since the paper's reported numbers were produced by whatever the library
   actually does, we port `colorhash()`'s real algorithm, not the prose description.
 - **Pinned versions** (`training/requirements.txt`) — a future default-filter change in Pillow or
   numpy would silently shift what "matching the paper" even means. `scikit-learn` is
@@ -218,7 +218,7 @@ Three sources feed `data/` (all gitignored except `data/example/`):
   would let punk-specific patterns dominate the edit classifier rather than what actually
   discriminates a manipulation. Kept for later scale/stress testing.
 - **`data/reference/test_manipulations/`** — obtained **directly from the paper's authors**, not a
-  public set: 405 manipulated CryptoPunk images plus a 1,802-row CSV of
+  public set: 202 manipulated CryptoPunks and 200 originals (402 images) plus a 1,802-row CSV of
   `(original, copy, is_copy, manipulation)` pairs with the authors' own precomputed hashes and
   distances. It doubles as a differential-test fixture and as a **cross-generator check** for the
   edit classifier (see below). **Shared informally — it stays local, is not redistributed, and no published
@@ -270,7 +270,7 @@ Skim or skip.*
 Before the pivot, all four paper hashes (plus dHash, a prerequisite) were reimplemented from
 scratch in C11 and validated **bit-exact** against Johannes Buchner's
 [`imagehash`](https://github.com/JohannesBuchner/imagehash) — the library that produced the
-paper's own published numbers.
+paper's own reported numbers.
 
 | Hash | Size | Parity | Notes |
 |------|------|--------|-------|

@@ -1,0 +1,110 @@
+\section{Dataset and Evaluation Method}
+\label{sec:method}
+
+\subsection{Images and generated copies}
+
+The paper's evaluation data is not public, so we built our own. The base corpus is 3,000 real
+NFT images from a public Kaggle collection~\cite{kaggle_nft}: 1,000 each from Azuki, Bored Ape
+Yacht Club (BAYC) and CryptoPunks. Azuki and BAYC are ordinary artwork, while CryptoPunks are
+$24\times24$ pixel art. A separate 10,000-image CryptoPunks set~\cite{kaggle_punks} was kept
+aside for stress tests and not mixed in, so that one collection does not dominate.
+
+The images carry no edit labels, so we generated copies ourselves, following the six edit
+types the paper takes from OpenSea's copymint examples (Figure~\ref{fig:edits}): flip,
+rotate or mirror; crop, resize or reposition; a text, logo or emoji overlay; a
+background-colour change; pixelation; and a colour swap or saturation change. We also generated exact copies as a control and
+non-matching pairs as negatives. Each edit is applied with three random variations per base
+image, using PIL.
+
+\paragraph{One labelling caveat.} Our generator's \texttt{flip\_rotate\_mirror} edit applies an
+optional mirror and then \emph{always} a rotation of 1--359 degrees. The category therefore
+contains no pure mirrors, and every result for it describes rotation. We separate the two
+in Section~\ref{sec:results}.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[font=\footnotesize]
+  \foreach \lab [count=\i from 0] in {original, exact copy, flip / rotate, crop / reposition,
+                                      text / logo, background, pixelated, recoloured} {
+    \pgfmathsetmacro{\x}{mod(\i,4)*3.6}
+    \pgfmathsetmacro{\y}{-floor(\i/4)*1.15}
+    \node[draw=ink2, rounded corners=2pt, minimum width=33mm, minimum height=8mm,
+          fill=rule!40] at (\x,\y) {\lab};
+  }
+\end{tikzpicture}
+\caption{The edit categories in our generated dataset: the six edit types from the paper, plus
+exact copies as a control. Non-matching pairs serve as negatives.}
+\label{fig:edits}
+\end{figure}
+
+\subsection{Train/test split}
+
+The split is made \textbf{by base image, before any edit is applied}, so no image's copies
+appear in both training and testing. We use 80\% for training and 20\% for testing: 2,400
+training bases (48,000 generated images, 55,200 labelled pairs) and 600 test bases (12,000
+images, 13,800 pairs). The paper uses the opposite split (20/80), because it tunes only a few
+scalar thresholds. We train a Random Forest over 93 features and eight labels, which benefits
+from more training data. The test split contains \textbf{11,400 copies and 2,400 non-copies}.
+
+\subsection{The authors' reference set}
+
+The paper's authors shared with us a small set of their own manipulated images: 202
+manipulated CryptoPunks and 200 originals, with a 1,802-row file of labelled
+original--candidate pairs (202 copies and 1,600 manipulated non-copies) and their own
+precomputed hashes and distances. We use it for two things: to check that our reimplementation
+matches theirs, and as an independent test made by a different generator. The set was shared
+privately, so it stays local and is not redistributed.
+
+\subsection{Pairwise evaluation}
+
+Each test row is a pair (stored original, query) with a label saying whether the query is a
+copy of that original. Every signal is scored on the pair directly, with no gallery or index in
+the accuracy path. This matches how the dataset is labelled and how the hashes are evaluated.
+It also rules out the failure described in Section~\ref{sec:oldbaseline}, where an index
+decided the result instead of the signal.
+
+\subsection{Metrics and operating points}
+
+We report precision $P=\frac{TP}{TP+FP}$, recall $R=\frac{TP}{TP+FN}$ and
+$F_1=\frac{2PR}{P+R}$. Two rules keep these honest:
+\begin{itemize}
+  \item \textbf{A recall always comes with its precision.} The single-edit test set is 82.6\%
+        copies, so ``flag everything'' scores F1 90.5. On the geometric subset used for the
+        sHash comparison (60\% copies) it scores 75.0. Detectors are compared at equal
+        precision wherever possible.
+  \item \textbf{Thresholds are chosen on training data and frozen for test.} The one exception
+        is deliberate and works against us: in the head-to-head comparison sHash's threshold
+        is chosen on the test set itself.
+\end{itemize}
+Inside the full detector, every signal is placed at the same false-alarm budget, at most 10\%
+of training non-copies flagged: aHash $\le 7$, pHash $\le 19$, hsvHash $\le 3$, sHash $\le 21$,
+ORB $> 23$ inliers. ORB's $> 16$ cutoff from the signal study sits at about 14\% false alarms,
+so using it inside the detector would give ORB a looser vote than the others. We also evaluate
+the detector at the paper's own thresholds (Section~\ref{sec:results}).
+
+\subsection{Retiring an earlier ORB baseline}
+\label{sec:oldbaseline}
+
+The project inherited a first ORB pipeline that reported F1 73.6\% (precision 82.7\%, recall
+66.3\%). Before building on it we checked it, and found that its gallery held 2,000 of the
+3,000 originals: every CryptoPunk was missing. At $24\times24$ pixels ORB found no keypoints
+in any punk, and the indexing code skipped images without descriptors without a warning. The
+result was decided by which collection an image belonged to, not by whether it was a copy. A
+script that does no image matching at all, only checking whether a filename is in the
+gallery, reproduces all four cells of the reported confusion matrix exactly (30,210 TP,
+15,390 FN, 6,306 FP, 3,294 TN). The threshold sweep was also flat (F1 73.58 to 73.52 across
+every setting), which confirmed that the ORB score was not deciding anything. We retired those
+numbers and rebuilt the evaluation pairwise, with the resolution normalisation of
+Section~\ref{sec:architecture}.
+
+\subsection{Reproducing the original hashes}
+
+Before changing the detector, we reimplemented the four hashes in C11, plus dHash which sHash
+uses internally. All five match Buchner's \texttt{imagehash} exactly on 600 distinct images,
+including all 402 of the authors' reference images, high-resolution NFTs, native CryptoPunks
+and synthetic edge cases. For sHash we matched the full ordered list of segment hashes, not
+only the final distance. Our sHash distance also reproduces all 1,802 distances in the
+authors' reference file. Two details made exact parity hard. First, Pillow declares some
+variables as \texttt{float} but computes with \texttt{double} literals, so a natural all-float
+port differs on about 0.4\% of pixels. Second, the paper's description of hsvHash differs from
+the code that produced its numbers, as noted in Section~2.1.

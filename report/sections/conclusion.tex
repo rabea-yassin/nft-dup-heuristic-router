@@ -1,0 +1,25 @@
+\section{Conclusion}
+
+We started from the copymint detector of Kotzer et al., in which four perceptual hashes vote and two
+agreeing votes mean a copy, and we set out to make it faster. Reimplementing it showed that one
+of the four signals, sHash, compares images one way and breaks the triangle inequality, so the
+BK-tree that searches it can silently skip a real copy.
+
+We replaced sHash with ORB feature matching and changed nothing else. On the geometric edits
+sHash was built for, ORB scores F1 90.6 against sHash's 76.4, even with sHash given a
+threshold chosen on the test set; at equal precision it catches 90.0\% of copies against
+27.2\%. In the full detector at the paper's own thresholds, the swap raises F1 from
+77.5 to 86.4 at the same 98.1\% precision, catching about 1,500 more of 11,400 copies. The
+gain holds when the paper's thresholds are re-tuned (+5.8), on images with two edits (+8.7),
+and modestly on the authors' own images (+3.3).
+
+The improvement has a measured price. ORB needs about 14.5\,KB per image where the paper's
+four hashes need about 56 bytes, and no descriptor budget lets it both fit in a mint
+transaction and beat sHash. Using ORB means changing where features are stored.
+
+Our edit classifier predicts accurately which signals an edit breaks, yet it does not improve
+the detector, because broken signals go silent rather than voting wrongly. The one situation
+where it could help, detail destroyed and colour changed together, is not observable with our
+cues because pixelation erases the colour trace.
+
+In short: we replaced one signal, measured it fairly, and reported its cost.
