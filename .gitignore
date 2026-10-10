@@ -54,15 +54,6 @@ logs/
 # --- Deploy key (repo-scoped SSH auth, never commit) ---
 .deploy_key/
 
-# --- Personal working notes, local-only ---
-# The single live working doc: status + next actions + vocabulary.
-# Findings belong in PROGRESS.md (tracked), never duplicated here.
-PLAN.md
-# The study & presentation guide (links into PROGRESS/GLOSSARY, no duplication).
-CHEATSHEET.md
-# The speaker script for the presentation deck.
-SCRIPT_V3.md
-
 # --- Editor / OS cruft ---
 .vscode/
 .idea/

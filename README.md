@@ -213,10 +213,6 @@ survives as a *scalability* discussion, not an accuracy claim.
 └── third_party/         # stb_image.h (C11 PNG decode)
 ```
 
-> `src/bktree/`, `src/features/` and `src/router/` are empty `.gitkeep` placeholders
-> left from the original C11 plan (a codegen'd, zero-allocation classifier). That plan is abandoned;
-> the directories are vestigial and can be removed.
-
 ## Dataset
 
 Three sources feed `data/` (all gitignored except `data/example/`):
@@ -243,11 +239,9 @@ demo (public Kaggle images only) running the full pipeline end-to-end on 2 image
 and output schema are visible on GitHub without shipping the full corpus.
 
 > **Local storage note.** The bulk image directories (`data/{raw,extra,train/images,test/images}`)
-> are large and regenerable, so on the development machine they are relocated off the root disk to
-> a separate drive and symlinked back in place — currently `/media/ra/Data/nft-dup-data/`. Every
-> path resolves transparently through the symlinks, and nothing tracked in git depends on them.
-> **If you run this repo on a machine without that drive, those symlinks dangle** — just re-run
-> `training/generate_dataset.py` to rebuild the images locally.
+> are large (several GB) and git-ignored; nothing tracked in git depends on them. On a fresh clone,
+> download the Kaggle sets into `data/raw/` and run `training/generate_dataset.py` to rebuild the
+> generated splits.
 
 ### Labeled data (`training/generate_dataset.py`)
 

@@ -27,8 +27,8 @@ typedef struct {
  * Returns the pixel count of the component. This is the C equivalent of
  * imagehash's _find_region: the `unassigned`/`already_segmented` set
  * bookkeeping there only prevents re-entering claimed pixels, which
- * `visited` handles directly, and (per the analysis in NEXT_STEPS) yields
- * the same components as plain connected-components on the mask. */
+ * `visited` handles directly, and (as checked while porting) yields the
+ * same components as plain connected-components on the mask. */
 static int flood_fill(const uint8_t *thresh, uint8_t *visited, int *queue,
                       int start, uint8_t target, seg_bbox *box) {
     int head = 0, tail = 0;
@@ -78,9 +78,9 @@ static int flood_fill(const uint8_t *thresh, uint8_t *visited, int *queue,
  * (class 0). Returns the number of kept segments (> min_segment_size),
  * writing their bounding boxes into `out`. Replicates the valley loop's
  * exact (loose) termination condition on the size of imagehash's
- * `already_segmented` set -- see NEXT_STEPS for why that set's cardinality
- * grows by the component size for components of >= 2 pixels and by 0 for
- * singletons. */
+ * `already_segmented` set. That set's cardinality grows by the component
+ * size for components of >= 2 pixels and by 0 for singletons (worked out
+ * from imagehash's source while porting). */
 static int find_all_segments(const uint8_t *thresh, uint8_t *visited,
                              int *queue, seg_bbox *out) {
     int nseg = 0;

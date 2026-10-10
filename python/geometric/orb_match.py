@@ -14,7 +14,7 @@ how the four hashes are evaluated -- so ORB drops in beside them as a directly
 comparable signal. It also removes the gallery from the accuracy path entirely,
 which is what made the previous baseline meaningless (its confusion matrix was
 decided by which images happened to be indexed; see verify_baseline.py). The
-LSH gallery survives only as a scalability question, in orb_index.py.
+LSH gallery survives only as a scalability question (discussed, not built).
 
 **Why the mirror variations are necessary.** ORB is rotation-invariant but not
 reflection-invariant: its BRIEF sampling pattern is not mirror-symmetric, so a

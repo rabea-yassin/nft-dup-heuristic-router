@@ -6,7 +6,7 @@ routing the vote beats the static rule. Everything here runs off CACHED inputs;
 this is arithmetic, not vision. No image is decoded.
 
 The four signals and their polarity (the single place polarity lives -- getting
-it backwards is the trap PLAN.md 0 warns about):
+it backwards is an easy, silent mistake):
 
     aHash / pHash / hsvHash / sHash  -> DISTANCE, fires when  dist <= threshold
     ORB                              -> inlier COUNT, fires when  count > threshold

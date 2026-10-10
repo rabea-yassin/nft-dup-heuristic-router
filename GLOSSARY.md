@@ -1,7 +1,7 @@
 # Glossary
 
 Plain-language definitions for every term this project leans on. The **single
-home** for definitions — PROGRESS.md and PLAN.md point here rather than
+home** for definitions — PROGRESS.md and README.md point here rather than
 re-explaining, so nothing drifts. If a term is fuzzy anywhere, it's defined here.
 
 The mental model behind almost every number: the system looks at a **pair** of
