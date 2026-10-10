@@ -50,6 +50,13 @@ typedef struct {
  * before returning; the returned shash_t itself is a plain value. */
 int shash_from_file(const char *path, shash_t *out_hash);
 
+/* The same sHash from an already-decoded, tightly packed 8-bit RGB buffer
+ * (width * height * 3 bytes) -- shash_from_file is stbi_load plus this.
+ * Split out so a benchmark can time the hash without the PNG decode.
+ * Returns 0 on success, -1 on bad arguments, -3 if a working allocation
+ * failed. */
+int shash_from_rgb(const uint8_t *pixels, int width, int height, shash_t *out_hash);
+
 /* ImageMultiHash.hash_diff: for each segment hash in `a`, find the
  * closest segment hash in `b`; pairs above `hamming_cutoff` are
  * discarded. Writes the number of matching segments and the sum of their

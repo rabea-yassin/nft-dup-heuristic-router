@@ -58,3 +58,8 @@ target_link_libraries(dhash_sanity_check PRIVATE hashes)
 
 add_executable(shash_sanity_check src/hashes/shash/shash_sanity_check.c)
 target_link_libraries(shash_sanity_check PRIVATE hashes)
+
+# Timing harness for the ORB vs sHash time comparison (driven by
+# python/geometric/bench_time.py, which also builds it directly with cc).
+add_executable(bench_shash src/bench/bench_shash.c)
+target_link_libraries(bench_shash PRIVATE hashes)

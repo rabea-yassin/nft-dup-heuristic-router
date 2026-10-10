@@ -54,6 +54,8 @@ py python/geometric/compare_shash.py      # Result 1, Table (*\ref{tab:h2h}*)
 py python/geometric/evaluate.py --threshold 16    # Result 2
 py python/geometric/diagnose_flip.py      # mirror vs rotation
 py python/geometric/descriptor_budget.py  # storage, Table (*\ref{tab:budget}*)
+py python/geometric/bench_time.py --pairs-per-type 100  # time, Table (*\ref{tab:time}*)
+py python/geometric/bench_time.py --raw-per-collection 50  # full resolution
 py python/router/evaluate_router.py       # classifier, Table (*\ref{tab:classifier}*)
 py python/detector/evaluate_routed.py     # with/without classifier
 py python/detector/evaluate_deployed.py   # Result 3, Table (*\ref{tab:whole}*)

@@ -11,7 +11,8 @@ perceptual hashes vote at fixed thresholds. We change two things:
    letting every hash vote unconditionally. (This component used to be called "the router"; the
    name collided with the networking sense once too often. The code module is still `router/`.)
 
-Both changes target **accuracy**, not speed.
+Both changes target **accuracy**, not speed. What the swap costs, in bytes and in time, is measured
+too (Finding 3).
 
 > **Status — complete.** The headline: the **sHash→ORB swap** is the project's contribution
 > (**+5.8 F1** single-manipulation, **+8.7 F1** multi-manipulation, at an equal ≤10% FP operating
@@ -20,8 +21,9 @@ Both changes target **accuracy**, not speed.
 > Phase E turns that null from incidental into **fundamental**: the two-signals-broken state the
 > classifier needs is *forensically self-cancelling* (pixelation is the only thing that blinds sHash,
 > and it also erases the colour tell the classifier would read, PROGRESS.md §10). *(An earlier phase
-> reimplemented the paper's four hashes in C11, bit-exact — groundwork we've since set down; kept
-> but no longer built on, [details below](#the-c11-hash-suite--preserved-groundwork).)* Full
+> reimplemented the paper's four hashes in C11, bit-exact — groundwork we've since set down; kept,
+> and reused only as the compiled sHash in the time comparison,
+> [details below](#the-c11-hash-suite--preserved-groundwork).)* Full
 > history, findings and numbers live in **[PROGRESS.md](PROGRESS.md)** — this file is the
 > *current architecture*.
 
@@ -101,6 +103,16 @@ accuracy-vs-bytes curve; the best usable point is still ~10× a transaction. Thi
 **architectural** boundary, not a tuning problem, and we report it as a finding rather than
 omitting it.
 
+**…and in time** *(PROGRESS.md §6)*. Making a fingerprint is not where the two differ: like for
+like (our bit-exact C sHash vs OpenCV ORB, both compiled, decode excluded) it takes **1.46 ms**
+for sHash and **0.94 ms** for ORB. Comparing a pair is where they differ: **≈34 ms** for ORB
+(match + RANSAC, ×4 mirror variants) against **≈0.1 µs** for sHash. Shrinking ORB to its size
+sweet spot (128 landmarks) barely helps: 0.72 ms to fingerprint, still **24 ms** per pair, because
+RANSAC, not the descriptor match, is most of the cost. At that per-pair cost ORB needs an index
+such as LSH to scale. As used, `imagehash` sHash (Python) takes 68 ms per
+fingerprint and 11 µs per pair; that row mixes Python with C++, which is why the like-for-like
+row exists. Reproduce with `python/geometric/bench_time.py`.
+
 ## Architecture
 
 ```
@@ -171,7 +183,8 @@ survives as a *scalability* discussion, not an accuracy claim.
 .
 ├── PROGRESS.md          # The project's history, findings and numbers (report material)
 ├── README.md            # This file: the current architecture
-├── src/hashes/          # C11 hash suite (complete, bit-exact, preserved — not extended)
+├── src/bench/           # bench_shash.c: times the C sHash for bench_time.py
+├── src/hashes/          # C11 hash suite (complete, bit-exact, preserved; sHash also takes decoded pixels, for timing)
 │   ├── common/          #   shared Pillow op ports + box-filter downsample
 │   ├── ahash/  phash/   #   64-bit
 │   ├── hsvhash/         #   42-bit, bit-exact colorhash
@@ -186,6 +199,7 @@ survives as a *scalability* discussion, not an accuracy claim.
 │   │   ├── shash_baseline.py    #   sHash scores, for the swap comparison
 │   │   ├── compare_shash.py     #   ORB vs sHash — the evidence for the swap
 │   │   ├── descriptor_budget.py #   accuracy-vs-bytes curve (--budgets: live demo knob)
+│   │   ├── bench_time.py        #   ORB vs sHash time: fingerprint + pair compare
 │   │   ├── verify_baseline.py   #   proof the old baseline measured gallery membership
 │   │   └── original/            #   teammate's initial pipeline, imported as-is (reference)
 │   └── router/          # The edit classifier: predicted manipulation → signal reliability
@@ -199,7 +213,7 @@ survives as a *scalability* discussion, not an accuracy claim.
 └── third_party/         # stb_image.h (C11 PNG decode)
 ```
 
-> `src/bench/`, `src/bktree/`, `src/features/` and `src/router/` are empty `.gitkeep` placeholders
+> `src/bktree/`, `src/features/` and `src/router/` are empty `.gitkeep` placeholders
 > left from the original C11 plan (a codegen'd, zero-allocation classifier). That plan is abandoned;
 > the directories are vestigial and can be removed.
 
@@ -264,8 +278,8 @@ the authors' `test_manipulations/` set, a different generator.
 ## The C11 hash suite — preserved groundwork
 
 *An earlier phase, before the pivot to Python — kept because it's honest and it produced
-Finding #1, but it is **not** the project's contribution and nothing here is built on further.
-Skim or skip.*
+Finding #1, but it is **not** the project's contribution. It returns once, as the compiled sHash in
+the time comparison (Finding 3); otherwise nothing here is built on further. Skim or skip.*
 
 Before the pivot, all four paper hashes (plus dHash, a prerequisite) were reimplemented from
 scratch in C11 and validated **bit-exact** against Johannes Buchner's
@@ -292,7 +306,11 @@ open by reading the library's actual C source rather than trusting its descripti
 write-up, and duplicating logic in two languages before the idea is proven is wasted effort — so
 the project went **Python-only**. What actually carries into the final work is small: the sHash
 port produced Finding #1, and these hashes are the reference our Python signals are checked
-against. Per-hash design notes live in each `src/hashes/<name>/README.md`.
+against. The port comes back once, for the time comparison (PROGRESS.md §6): there, timing the
+Python library against OpenCV's C++ would repeat exactly the unfair comparison above, so the
+like-for-like row times this compiled sHash instead (through `shash_from_rgb`, a decode-free entry
+point added for the purpose and re-verified bit-exact on all 12,000 test images). Per-hash design
+notes live in each `src/hashes/<name>/README.md`.
 
 ## Roadmap
 
@@ -304,6 +322,7 @@ against. Per-hash design notes live in each `src/hashes/<name>/README.md`.
 | **C** — The edit classifier: 93 absolute features → RandomForest → manipulation + soft reliability | ✅ done (PROGRESS §8) |
 | **D** — The gated detector: dynamic thresholds over {aHash, pHash, hsvHash, ORB}, ≥2-agree, static fallback | ✅ done (PROGRESS §9) |
 | **E** — Multi-manipulation test: compose generator, sHash gating map, independent multi-label heads, four-way eval | ✅ done (PROGRESS §10) |
+| Time comparison (asked for at the final presentation): ORB vs sHash, fingerprint + pair, as used and like for like | ✅ done (PROGRESS §6) |
 | Deferred | sHash's index structure (awaiting the authors' reply → a documented finding) |
 
 Phase D's deliverable is a **three-way comparison** that isolates each contribution:

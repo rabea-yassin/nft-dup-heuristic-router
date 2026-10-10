@@ -5,8 +5,11 @@ figures can be regenerated without the (git-ignored) datasets and score caches.
 
     python3 report/figures/make_figures.py          # writes report/figures/*.pdf
                                                     # and poster/assets/*.png
+    python3 report/figures/make_figures.py --deck-dir DIR   # also the slide-10
+                                                    # version of the time chart
 """
 
+import argparse
 from pathlib import Path
 
 import matplotlib
@@ -20,6 +23,7 @@ POSTER_ASSETS = HERE.parent.parent / "poster" / "assets"
 # Validated categorical slots 1-2 (dataviz reference palette, light mode).
 ORB = "#2a78d6"      # our replacement / the swap
 SHASH = "#eb6834"    # sHash / the paper's detector
+ORB_128 = "#86b5ec"  # ORB at 128 landmarks: a lighter step of ORB's blue
 # The vote-rule chart encodes rules, not signals, so it gets its own pair
 # (slots 7 and 3, validated together; aqua is direct-labelled for contrast).
 RULE_2 = "#4a3aa7"
@@ -158,6 +162,39 @@ def storage_curve():
     save(fig, "fig_storage")
 
 
+def time_bars(path, figsize=(5.0, 3.4), fs=12):
+    # PROGRESS §6, like for like (C sHash vs OpenCV ORB), medians per item.
+    # Two panels on ordinary linear axes in ms: the fingerprint bars come out
+    # about equal, and sHash's 0.1 us pair bar is invisible next to ORB's 34 ms --
+    # which is the finding, so a linear scale shows it honestly.
+    # ORB at 128 landmarks (the size curve's sweet spot) is the same signal, so a
+    # lighter step of ORB's blue, told apart by its direct label.
+    panels = [("Fingerprint a new image", [("sHash", 1.46, "1.5 ms", SHASH),
+                                           ("ORB, 455", 0.94, "0.9 ms", ORB),
+                                           ("ORB, 128", 0.72, "0.7 ms", ORB_128)], 2.0),
+              ("Compare one pair", [("sHash", 0.000104, "≈ 0.1 µs", SHASH),
+                                    ("ORB, 455", 34.5, "34 ms", ORB),
+                                    ("ORB, 128", 24.3, "24 ms", ORB_128)], 40.0)]
+    fig, axes = plt.subplots(2, 1, figsize=figsize, gridspec_kw=dict(hspace=1.0))
+    for ax, (title, bars, xmax) in zip(axes, panels):
+        names = [b[0] for b in bars][::-1]
+        vals = [b[1] for b in bars][::-1]
+        ax.barh(names, vals, height=0.62, color=[b[3] for b in bars][::-1], edgecolor="white", lw=0.8)
+        for yy, (v, txt) in enumerate(zip(vals, [b[2] for b in bars][::-1])):
+            ax.text(v + xmax * 0.02, yy, txt, va="center", fontsize=fs, color=INK, fontweight="bold")
+        ax.set_xlim(0, xmax)
+        ax.set_xticks([0, 0.5, 1.0, 1.5, 2.0] if xmax == 2.0 else [0, 10, 20, 30, 40])
+        ax.set_title(title, loc="left", fontsize=fs + 1, fontweight="bold", color=INK, pad=8)
+        ax.set_xlabel("milliseconds", fontsize=fs - 2)
+        ax.set_ylim(-0.6, len(bars) - 0.4)
+        ax.tick_params(axis="y", length=0, labelsize=fs)
+        ax.tick_params(axis="x", labelsize=fs - 2)
+        ax.xaxis.grid(True, color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+    fig.savefig(path, dpi=300, transparent=True)
+    plt.close(fig)
+
+
 def prevalence():
     # PROGRESS §9.2: static ORB panel, F1 reweighted to an assumed prevalence.
     prev = [2, 10, 25, 50, 82.6]
@@ -185,9 +222,17 @@ def prevalence():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--deck-dir", type=Path, help="also write the deck version of the time chart here")
+    args = parser.parse_args()
     head_to_head()
     by_edit_type()
     whole_detector()
     storage_curve()
     prevalence()
+    time_bars(HERE / "fig_time.pdf", figsize=(5.2, 3.0), fs=9)  # report
+    time_bars(POSTER_ASSETS / "fig_time_bars.png")  # poster half-column
+    if args.deck_dir:
+        args.deck_dir.mkdir(parents=True, exist_ok=True)
+        time_bars(args.deck_dir / "slide10_time_chart.png")
     print("figures written to", HERE, "and", POSTER_ASSETS)

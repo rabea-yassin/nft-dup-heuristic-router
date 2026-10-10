@@ -132,13 +132,23 @@ int shash_from_file(const char *path, shash_t *out_hash) {
         return -1;
     }
 
-    int rc = 0;
     int width, height, source_channels;
     unsigned char *pixels = stbi_load(path, &width, &height, &source_channels, SHASH_CHANNELS);
     if (!pixels) {
         return -2;
     }
 
+    int rc = shash_from_rgb(pixels, width, height, out_hash);
+    stbi_image_free(pixels);
+    return rc;
+}
+
+int shash_from_rgb(const uint8_t *pixels, int width, int height, shash_t *out_hash) {
+    if (!pixels || width <= 0 || height <= 0 || !out_hash) {
+        return -1;
+    }
+
+    int rc = 0;
     uint8_t *l_full = NULL, *seg = NULL, *median = NULL, *thresh = NULL;
     uint8_t *visited = NULL, *crop = NULL;
     int *queue = NULL;
@@ -165,8 +175,6 @@ int shash_from_file(const char *path, shash_t *out_hash) {
      * 0 either way), so imagehash's "crop the RGB original, then dhash
      * converts to L" collapses to cropping this L plane. */
     pil_rgb_to_l(pixels, width, height, l_full);
-    stbi_image_free(pixels);
-    pixels = NULL;
 
     /* image.convert('L').resize((300,300), LANCZOS) */
     rc = pil_resize_lanczos_l(l_full, width, height, seg, SHASH_SEG, SHASH_SEG);
@@ -228,7 +236,6 @@ int shash_from_file(const char *path, shash_t *out_hash) {
     rc = 0;
 
 cleanup:
-    if (pixels) stbi_image_free(pixels);
     free(l_full);
     free(seg);
     free(median);

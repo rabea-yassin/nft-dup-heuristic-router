@@ -68,8 +68,8 @@ report numbers on the *test* split, which those thresholds never saw. Otherwise
 you're grading your own homework. Choosing an operating point on test is the exact
 error that invalidated the imported baseline (PROGRESS §4).
 
-**As-deployed (frozen) thresholds** — evaluating a detector at the *published*
-thresholds it would actually ship with, instead of re-tuning them to the dataset in
+**As-deployed (frozen) thresholds** — evaluating a detector at the paper's *own*
+thresholds, the ones it would actually ship with, instead of re-tuning them to the dataset in
 front of you. Re-tuning can flatter *or* handicap a detector depending on the target
 distribution, so the frozen comparison is the one that answers "how does their
 algorithm behave in the real world" (PROGRESS §9.1/§9.5). Contrast the **iso-FP** protocol
@@ -167,6 +167,29 @@ BK-tree can't hold ORB. (A KD-tree would imply SIFT's float descriptors instead.
 which is how we evaluate (matches the dataset's `is_copy`-labels-a-pair schema).
 *Retrieval*: search one query against a whole gallery — the deployment shape, and
 where a stale gallery invalidated the old baseline (PROGRESS §4).
+
+---
+
+## Timing — what "how long it takes" means here (PROGRESS §6)
+
+**Fingerprint a new image** — the per-image work: ORB finds and describes its
+landmarks; sHash segments the image into its main objects and dHashes each one.
+Done once per image when it is stored.
+
+**Query side (×4)** — ORB's matcher describes the *copy* four times (as is, and
+three mirror flips), because ORB is not mirror-invariant. So a query costs about
+four fingerprints.
+
+**Compare one pair** — the per-candidate work: ORB matches two landmark sets and
+fits a transform with RANSAC (×4 variants); sHash's mean-of-mins distance is a
+handful of bit counts. This, not the fingerprint, is where the two differ
+(≈34 ms vs ≈0.1 µs), and why ORB needs an index such as LSH.
+
+**As used vs like for like** — two labelled timing rows. *As used*: the tools as
+built (the paper's Python `imagehash` vs OpenCV's C++ ORB), which mixes languages.
+*Like for like*: compiled vs compiled (our bit-exact C sHash vs OpenCV ORB), the
+fair algorithm comparison. Our instructor ruled C-vs-Python claims unfair, which is
+why the second row exists.
 
 ---
 

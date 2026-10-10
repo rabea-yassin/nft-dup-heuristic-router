@@ -29,7 +29,13 @@ bit-exact Pillow ports in [`common/pil_ops`](../common).
 
 `shash_t` = `{ int count; dhash_t segment_hashes[SHASH_MAX_SEGMENTS]; }`.
 `SHASH_MAX_SEGMENTS` = 90000/501 = **179** is provably the max (each kept
-segment is > 500 of 90000 px). Comparison functions:
+segment is > 500 of 90000 px).
+
+Two entry points: `shash_from_file(path)` decodes the image (stb) and calls
+`shash_from_rgb(pixels, w, h)`, which hashes an already-decoded 8-bit RGB buffer.
+The split exists so [`src/bench/bench_shash.c`](../../bench/bench_shash.c) can time
+the hash without the decode (PROGRESS.md §6); it was re-verified bit-exact on all
+12,000 test images. Comparison functions:
 
 | Function | Meaning |
 |----------|---------|

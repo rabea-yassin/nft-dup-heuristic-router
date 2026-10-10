@@ -297,20 +297,32 @@ def left_column(slide):
          B("skips a branch holding a real copy"), N(" and nothing looks wrong.")]])
     y += 3.4 + SECTION_GAP
 
-    # 4. The cost ----------------------------------------------------------- #
-    y = header(slide, col, y, "The honest part: what ORB costs")
-    text(slide, x, y, COL_W, 4.0, [
-        [N("The paper stores its four hashes, "), B("≈56 bytes"), N(", inside each "
-           "mint transaction (300–500 bytes). ORB stores "), B("14,560 bytes"),
-         N(" per image: about 36 transactions.")]])
-    y += 4.2
-    h = picture(slide, ASSETS / "fig_storage.png", x + 6.5, y, w=COL_W - 13.0)
-    y += h + 0.4
-    text(slide, x, y, COL_W, 2.6, [
-        [N("Shrink it and the advantage goes first: at 32 landmarks (1 KB, still 2.6 "
-           "transactions) ORB only ties sHash. "),
-         B("No size both fits and wins.")]])
-    y += 2.8
+    # 4. The cost: space and time, side by side ---------------------------- #
+    y = header(slide, col, y, "What ORB costs: space and time")
+    half = (COL_W - 1.2) / 2
+    panels = [
+        ("Space: too big for the transaction", ASSETS / "fig_storage.png", [
+            [N("The paper stores its four hashes ("), B("≈56 B"), N(") in each mint "
+               "transaction (300–500 B). ORB needs "), B("14,560 B"), N(", about 36 "
+               "transactions; at 32 landmarks it only ties sHash. "),
+             B("No size both fits and wins.")]]),
+        ("Time: comparing is what's slow", ASSETS / "fig_time_bars.png", [
+            [N("Making a fingerprint costs about the same. "),
+             B("Comparing a pair takes ≈34 ms for ORB, ≈0.1 µs for sHash"),
+             N("; shrinking ORB to 128 landmarks still leaves 24 ms. ORB needs an index "
+               "such as LSH.")],
+            [N("455 / 128: landmarks kept. Python library, as used: 68 ms, 11 µs.",
+               size=19, color=INK_2)]]),
+    ]
+    chart_h = 0.0
+    for i, (title, img, paras) in enumerate(panels):
+        px = x + i * (half + 1.2)
+        text(slide, px, y, half, 1.3, [[B(title, size=24)]], space_after=0)
+        chart_h = max(chart_h, picture(slide, img, px, y + 1.6, w=half))
+    for i, (title, img, paras) in enumerate(panels):
+        px = x + i * (half + 1.2)
+        text(slide, px, y + 1.6 + chart_h + 0.5, half, 5.6, paras, size=22)
+    y += 1.6 + chart_h + 0.5 + 5.6
     print(f"left column ends at {y:.1f} cm (footer at {H - 2.4:.1f})")
 
 
@@ -336,7 +348,7 @@ def right_column(slide):
 
     # 6. Result 1 ----------------------------------------------------------- #
     y = header(slide, col, y, "Result 1: +14.2 F1 on sHash's own job")
-    y += side_by_side(ASSETS / "fig_head_to_head.png", 18.5, [
+    y += side_by_side(ASSETS / "fig_head_to_head.png", 19.5, [
         [N("On the crop and rotation copies sHash was built for.")],
         [N("sHash was "), B("allowed to pick its threshold on the test answers"),
          N("; ORB's was set on training data.")],
@@ -345,7 +357,7 @@ def right_column(slide):
 
     # 7. Result 2 ----------------------------------------------------------- #
     y = header(slide, col, y, "Result 2: it wins almost everywhere")
-    y += side_by_side(ASSETS / "fig_by_edit_type.png", 20.5, [
+    y += side_by_side(ASSETS / "fig_by_edit_type.png", 21.0, [
         [N("Share of each edit's copies ORB catches (precision 91.2%).")],
         [N("One clean failure: "), B("pixelation"),
          N(" destroys the detail corners are made of.")],
@@ -354,7 +366,7 @@ def right_column(slide):
 
     # 8. Result 3 ----------------------------------------------------------- #
     y = header(slide, col, y, "Result 3: +8.9 F1 in the whole detector")
-    y += side_by_side(ASSETS / "fig_whole_detector.png", 18.5, [
+    y += side_by_side(ASSETS / "fig_whole_detector.png", 19.5, [
         [N("Change only sHash; keep the paper's own thresholds.")],
         [N("At the same "), B("98.1% precision"), N(", recall rises from "),
          B("64.1% to 77.2%"), N(": ~1,500 more copies caught.")],
@@ -367,8 +379,8 @@ def right_column(slide):
         [B("Check the maths before optimising it. "),
          N("We set out to make the search faster and found it was unsound.")],
         [B("How a signal is stored decides how it can be searched. "),
-         N("A fingerprint fits a tree; a set of landmarks needs LSH, and far more "
-           "space.")],
+         N("A fingerprint fits a tree; a set of landmarks needs LSH, far more "
+           "space, and ≈34 ms per pair instead of ≈0.1 µs.")],
         [B("A negative result is still a result. "),
          N("Our edit classifier predicts which signals an edit breaks (100% / 97.5%), "
            "but doesn't improve the detector: broken signals go silent rather than "

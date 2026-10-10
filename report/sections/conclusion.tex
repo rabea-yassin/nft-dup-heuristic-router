@@ -15,11 +15,13 @@ and modestly on the authors' own images (+3.3).
 
 The improvement has a measured price. ORB needs about 14.5\,KB per image where the paper's
 four hashes need about 56 bytes, and no descriptor budget lets it both fit in a mint
-transaction and beat sHash. Using ORB means changing where features are stored.
+transaction and beat sHash. Using ORB means changing where features are stored. It also
+costs time where it matters most: a fingerprint takes about as long as sHash's, but comparing
+one pair takes about 34\,ms against about 0.1\,\textmu s, so ORB needs an index such as LSH.
 
 Our edit classifier predicts accurately which signals an edit breaks, yet it does not improve
 the detector, because broken signals go silent rather than voting wrongly. The one situation
 where it could help, detail destroyed and colour changed together, is not observable with our
 cues because pixelation erases the colour trace.
 
-In short: we replaced one signal, measured it fairly, and reported its cost.
+In short: we replaced one signal, measured it fairly, and reported its cost in space and time.

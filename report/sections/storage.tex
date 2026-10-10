@@ -1,4 +1,4 @@
-\section{Finding 2: What ORB Costs in Storage}
+\section{Finding 2: What ORB Costs in Storage and Time}
 \label{sec:storage}
 
 The paper's design stores every image's hashes inside its mint transaction, so that detection
@@ -71,3 +71,78 @@ features cannot travel in transaction metadata. The descriptor type also decides
 one fixed-width string fits a BK-tree, while a set of binary descriptors needs LSH. The
 signal and its storage cannot be chosen separately. Section~\ref{sec:future} discusses ways
 around the limit.
+
+\subsection{Time}
+\label{sec:time}
+
+Storage asks what ORB costs to keep. We also measured what it costs to run, on the two tasks
+both signals perform: \emph{fingerprinting a new image} (ORB finds and describes its
+landmarks; sHash segments the image into its main objects and hashes each one) and
+\emph{comparing one pair} (ORB matches the two landmark sets and fits a geometric transform
+with RANSAC, once for each of the four mirror variants; sHash computes the paper's
+mean-of-minimums distance). Search and index time were not measured for either signal.
+
+\paragraph{Two comparisons, and why.} Section~\ref{sec:goals} explains that a C11-versus-Python
+speed claim is not fair: it mixes language effects with algorithmic ones. We therefore report
+two rows and say what each answers. The \emph{as-used} row is the tools as actually built:
+\texttt{imagehash}, the Python library behind the paper's numbers, against OpenCV's ORB (C++).
+It mixes languages and is not an algorithm comparison. The \emph{like-for-like} row is the
+algorithm comparison: our bit-exact C11 port of sHash (Section~\ref{sec:reimpl}) against
+OpenCV's ORB, both compiled code. Even there the remaining bias runs against sHash, since
+OpenCV is vectorised and our port is a plain \texttt{-O2} build.
+
+\paragraph{Protocol.} 1,168 images and 800 pairs from the test split (100 pairs of every edit
+type, non-copies included); one warm-up and five timed runs per item, keeping the median; a
+single thread on an Apple M5. Decoding the image file is excluded on both sides: both signals
+need the pixels, and each side decodes with a different library (Pillow takes about 1.1\,ms
+per image). The timed code is the evaluated code: every timed sHash distance equals the one
+used for accuracy, and the C port, split into decode plus hash for this purpose, still matches
+\texttt{imagehash} bit for bit on all 12,000 test images. Two full runs agree to within 3\%.
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Median per item & sHash, as used & sHash, like for like & ORB & ORB \\
+                & (\texttt{imagehash}) & (C11 port) & (455 landmarks) & (128) \\
+\midrule
+Fingerprint a new image & 67.9\,ms & \textbf{1.46\,ms} & \textbf{0.94\,ms} & 0.72\,ms \\
+\quad ORB query side ($\times$4 mirrors) & & & 3.97\,ms & 3.12\,ms \\
+\textbf{Compare one pair} & 11.3\,\textmu s & \textbf{0.1\,\textmu s} & \textbf{34.5\,ms} & 24.3\,ms \\
+\bottomrule
+\end{tabular}
+\caption{Time per item, test split. The as-used column mixes Python with C++; the
+like-for-like columns are the algorithm comparison. ORB at 128 landmarks is the size curve's
+sweet spot (Table~\ref{tab:budget}).}
+\label{tab:time}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.72\linewidth]{\fig{fig_time.pdf}}
+\caption{The like-for-like rows of Table~\ref{tab:time}, on ordinary millisecond axes. The two
+signals take about as long to fingerprint an image; sHash's pair comparison (0.1\,\textmu s) is
+too short to draw next to ORB's.}
+\label{fig:time}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{Making a fingerprint is not where the two differ.} Like for like, ORB takes
+        0.94\,ms and sHash 1.46\,ms. The as-used 68\,ms is mostly language: about 70\% of it
+        is the pure-Python flood fill inside \texttt{imagehash}.
+  \item \textbf{Comparing a pair is where they differ:} about 34\,ms for ORB against about
+        0.1\,\textmu s for sHash (11\,\textmu s in Python). Two fixed-width hashes are compared
+        with a handful of bit counts; two landmark sets need a matching step and a RANSAC fit,
+        four times over. At this per-pair cost, ORB needs an index such as LSH to scale.
+  \item \textbf{A smaller ORB saves space, not much time.} Matching the descriptors is only
+        about 5.9 of the 34.5\,ms; RANSAC is the rest. At 128 landmarks a pair still takes
+        24.3\,ms, although the bytes fall by 74\%.
+  \item \textbf{At full resolution} (a sensitivity check on 50 original images per collection),
+        fingerprinting a 2000\,px Azuki image takes 16.3\,ms for ORB, about 14.7\,ms of it the
+        shrink to 256\,px, against 6.8\,ms for the C port of sHash. Pair times do not depend on
+        resolution.
+\end{itemize}
+
+The paper reports its own search times (its Table~VII: from 120\,ms over 100 stored images to
+about 11\,s over a million, for its Python module with four BK-trees). Those time a whole search
+on different hardware, while ours time single operations, so we cite them as context only.

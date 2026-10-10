@@ -141,7 +141,8 @@ Three things landed at once.
 ### The resulting pivot
 
 - **Python-only from here.** The C11 hashes stay in the repo (`src/hashes/`, all bit-exact,
-  documented per-hash) but are not extended. They remain a genuine result — a validated,
+  documented per-hash) but are not extended. (One later exception, §6: sHash gained
+  `shash_from_rgb`, a decode-free entry point, so the time comparison could time it.) They remain a genuine result — a validated,
   from-scratch reimplementation of the paper's hash suite — just not the project's thesis.
 - **The router survives, re-aimed at accuracy instead of speed.** The paper's static detector
   lets *every* hash vote at fixed thresholds, including hashes that are known-broken for a given
@@ -436,6 +437,85 @@ paper stores hashes on-chain at all: Sec. VI states it is so validators can chec
 *"in a reasonable time"* without fetching the image. On-chain hashes are a
 **latency** optimisation, and ORB is too large to buy in at that price. That is a
 genuine finding: the paper's premise has a measured boundary, and we located it.
+
+### …and in time: making a fingerprint is cheap for both; comparing a pair is not
+
+The size table answers "what does ORB cost to store". At the final presentation Ori
+asked the matching question: what does it cost in **time**? We timed the two tasks
+both signals perform:
+
+- **(a) fingerprint a new image.** ORB finds and describes its landmarks. sHash
+  segments the image into its main objects and dHashes each one. ORB's query side
+  describes the copy four times (the mirror variants in `OrbMatcher.score`), so we
+  report that as well.
+- **(b) compare one pair.** ORB runs a cross-checked brute-force match plus RANSAC,
+  once per mirror variant. sHash computes the paper's mean-of-mins distance.
+
+**Two comparisons, both labelled.** Our instructor ruled C-vs-Python speed claims
+unfair (§3), so we report two rows and say what each one answers:
+
+- *As used* is `imagehash.crop_resistant_hash`, the library behind the paper's
+  numbers (Python + Pillow), against `cv2` ORB (C++). It answers "how fast is each
+  system as built". It mixes languages, which is exactly why the second row exists.
+- *Like for like* is our bit-exact C port of sHash (§1) against `cv2` ORB, both
+  compiled code. It answers "which algorithm is cheaper". The remaining bias runs
+  **against sHash**: OpenCV is SIMD-optimised, while our port is a
+  correctness-first `-O2` build.
+
+**Protocol.**
+- Data: 1,168 images and 800 pairs from the test split, 100 pairs of every edit
+  type, non-duplicates included.
+- Each item gets one warm-up and 5 timed runs, and we keep the per-item median.
+- Single-threaded throughout, on an Apple M5.
+- **Decode is excluded on both sides.** It is shared work (both signals need the
+  pixels), and each side decodes with a different library. For reference, Pillow
+  takes ≈1.1 ms per 256 px image.
+- The timed code is the measured code. Every C segment list equals imagehash's, and
+  every sHash distance equals `shash_scores.csv`. The C port was split into decode +
+  `shash_from_rgb` for this, and it was re-checked bit-exact on all 12,000 test
+  images and all 13,800 pair distances. ORB inliers equal `OrbMatcher.score()`.
+- Two full runs agree to within 3% on every median.
+
+| median per item | sHash, as used (imagehash) | sHash, like for like (C) | ORB, 500 | ORB, 128 |
+|---|---|---|---|---|
+| (a) fingerprint a new image | 67.9 ms | **1.46 ms** | **0.94 ms** | 0.72 ms |
+| (a′) ORB query side (×4 mirrors) | — | — | 3.97 ms | 3.12 ms |
+| **(b) compare one pair** | 11.3 µs | **≈0.1 µs** (104 ns) | **34.5 ms** | 24.3 ms |
+
+*Reproduce with `python/geometric/bench_time.py --split test --pairs-per-type 100`
+(it builds `src/bench/bench_shash.c`). Per-image and per-pair rows, with p95 and
+per-collection medians, are in `data/test/timing_{images,pairs}.csv`.*
+
+Readings:
+- **Making a fingerprint is not where the two differ.** Like for like, ORB (0.94 ms)
+  and sHash (1.46 ms) are about the same. The as-used 68 ms is mostly language: ≈70%
+  of it is the pure-Python flood fill (`_find_region`) inside `crop_resistant_hash`.
+- **Comparing a pair is: ≈34 ms for ORB against ≈0.1 µs for sHash** (≈11 µs in
+  Python). A pair of fixed-width hashes is a handful of popcounts. A pair of ORB
+  landmark sets is a matching problem plus a RANSAC fit, four times over. At this
+  per-pair cost, ORB needs an index such as LSH to scale. We did not benchmark
+  search time for either signal.
+- **Shrinking ORB saves space, not much time.** The descriptor match is only
+  ≈5.9 ms of the 34.5 ms; RANSAC is the rest. So 128 landmarks cuts 74% of the bytes
+  but only ≈10 ms of the pair time.
+- **Native resolution (sensitivity, fingerprints only, 50 `data/raw` images per
+  collection).** At full size (azuki 2000 px) ORB's fingerprint rises to 16.3 ms,
+  ≈14.7 ms of it the shrink to 256 px, against 6.8 ms for C sHash and 79 ms for imagehash.
+  bayc (631 px) gives 2.9 vs 2.2 ms, and punks (24 px) are unchanged. Pair times do
+  not depend on resolution.
+
+**Context, not comparison.** The paper reports its own search times (its Table VII:
+120 ms over 100 stored images up to ≈11 s over 1M, its Python module with four
+BK-trees, on an i7 PC). Those numbers time a whole search, while ours time single
+operations, on different hardware and in different languages. We cite them only as
+context and draw no comparison from them.
+
+**A reproducibility note found along the way.** On this machine's OpenCV (5.0.0),
+ORB inlier counts are deterministic run to run. But they equal the cached
+`orb_scores.csv`, computed on the earlier Linux setup, on 596/800 pairs; the rest
+differ by a few inliers. In a 300-pair spot check, 4 verdicts flipped at `t=16`. The
+accuracy numbers in this log stand as measured on that setup, but they will not
+reproduce bit for bit across OpenCV builds.
 
 ---
 

@@ -26,7 +26,9 @@ work changed the project in three ways:
         four BK-tree searches makes little sense when one of the four trees can miss real copies.
   \item \textbf{A C11-versus-Python speed comparison would not be a fair claim.} Our
         instructor pointed out that comparing a C11 implementation against the paper's Python
-        mixes language effects with algorithmic ones.
+        mixes language effects with algorithmic ones. (When we later measured time,
+        Section~\ref{sec:time}, we therefore compared compiled code with compiled code, and kept
+        the Python library only as a separate, labelled row.)
   \item \textbf{A better target existed.} The paper's own future-work section points at its
         geometric blind spots, and feature matching addresses exactly those.
 \end{itemize}
@@ -36,7 +38,7 @@ The revised goals were therefore about \textbf{accuracy}:
   \item replace sHash with a signal that does its job, cropping and rotation, and can be indexed
         soundly;
   \item measure the replacement fairly: against sHash on its own edits, inside the paper's
-        unchanged detector, and against its storage cost;
+        unchanged detector, and against its storage and time cost;
   \item re-aim the edit classifier from speed to accuracy (stop trusting a signal on the edits
         known to break it) and measure whether that helps.
 \end{enumerate}
@@ -64,7 +66,8 @@ Stage & Work & Outcome \\
   cross-generator check & Result 3; classifier adds $\approx 0$ \\
 7. Phase E: multi-edit test & Two-edit generator, independent classifier heads, four-way
   comparison & The colour trace is erased by pixelation \\
-8. Write-up & Presentation, final report, poster & This document \\
+8. Write-up & Presentation, final report, poster; a time comparison, added after the
+  presentation & This document \\
 \bottomrule
 \end{tabularx}
 \caption{Project stages, in order.}

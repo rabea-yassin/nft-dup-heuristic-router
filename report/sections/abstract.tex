@@ -23,7 +23,10 @@ re-tuned to our data the gain is 81.7 to 87.5 (+5.8).
 The improvement has a cost that we report as a finding. The paper stores its four hashes,
 about 56 bytes, inside each mint transaction (300--500 bytes). ORB needs about 14.5\,KB per
 image, roughly 36 transactions. Shrinking it removes the advantage before it fits: at 32
-landmarks (1\,KB, still 2.6 transactions) ORB only ties sHash.
+landmarks (1\,KB, still 2.6 transactions) ORB only ties sHash. In time, making a
+fingerprint costs about the same for both (0.94\,ms for ORB, 1.46\,ms for sHash, both in
+compiled code), but comparing one pair takes about 34\,ms for ORB against about
+0.1\,\textmu s for sHash, so ORB needs an index such as LSH to scale.
 
 Finally, we built an \emph{edit classifier} that predicts from the query image alone which
 kind of edit was applied, so the detector could stop trusting signals known to fail on that

@@ -32,7 +32,7 @@ We set out to make that detector cheaper to run, using a classifier that predict
 and skips searches that cannot help (Section~\ref{sec:goals}). Reimplementing the detector
 changed the direction of the project. We found that sHash cannot be searched correctly in a
 BK-tree (Section~\ref{sec:shash}), replaced it with ORB feature matching, and measured the
-replacement on its own, inside the full detector, and against its storage cost
+replacement on its own, inside the full detector, and against its storage and time cost
 (Sections~\ref{sec:results}--\ref{sec:storage}). We also built the edit classifier and
 measured why it does not improve accuracy (Section~\ref{sec:classifier}).
 
@@ -44,7 +44,8 @@ The main contributions are:
         which a BK-tree search misses a real copy because of it;
   \item an ORB-based replacement for sHash, measured against sHash on the edits sHash was
         designed for and inside the paper's full detector;
-  \item a measurement of what the replacement costs in storage, at every descriptor budget;
+  \item a measurement of what the replacement costs in storage, at every descriptor budget,
+        and in time, for fingerprinting an image and for comparing a pair;
   \item an edit classifier, and an explanation, backed by experiments, of why it does not
         improve the detector.
 \end{enumerate}
